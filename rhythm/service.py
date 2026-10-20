@@ -125,14 +125,48 @@ async def search_options(query: str) -> list[dict]:
     return fallback[:15]
 
 
+def _split_track_query(query: str) -> tuple[str, str] | None:
+    parts = re.split(r"\\s+(?:—|–|-)\\s+|\\s+\\|\\s+", query.strip(), maxsplit=1)
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        return None
+    return parts[0].strip(), parts[1].strip()
+
+
 async def resolve_track(query: str) -> tuple[dict, dict]:
     track = None
+    requested = _split_track_query(query)
     try:
-        catalog_tracks = await search_tracks(query)
-        if catalog_tracks:
+        catalog_tracks = await search_tracks(query, limit=20 if requested else 8)
+        if requested:
+            requested_artist, requested_title = requested
+            ranked = []
+            for candidate in catalog_tracks:
+                artist_score = _similarity(requested_artist, candidate.get("artist", ""))
+                title_score = _similarity(requested_title, candidate.get("title", ""))
+                combined = title_score * 0.7 + artist_score * 0.3
+                ranked.append((combined, artist_score, title_score, candidate))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            if ranked and ranked[0][1] >= 50 and ranked[0][2] >= 65:
+                track = dict(ranked[0][3])
+                log.info("Accepted catalog metadata for %r: artist_score=%s title_score=%s",
+                         query, round(ranked[0][1]), round(ranked[0][2]))
+            else:
+                # Do not let a vaguely similar catalog result overwrite an explicit artist/title.
+                track = {
+                    "title": requested_title,
+                    "artist": requested_artist,
+                    "album": "",
+                    "duration": None,
+                    "artwork_url": "",
+                    "track_url": "",
+                    "metadata_score": 0,
+                    "metadata_source": "explicit query fallback",
+                }
+                log.info("No confident catalog match for %r; preserving the user's artist/title", query)
+        elif catalog_tracks:
             best = catalog_tracks[0]
-            if best.get("metadata_score", 0) >= 38:
-                track = best
+            if best.get("metadata_score", 0) >= 55:
+                track = dict(best)
                 track["album"] = track.get("album") or ""
             else:
                 log.info("Apple/iTunes match too weak for query=%r score=%s; trying audio sources directly",
@@ -142,6 +176,12 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
     except Exception:
         # A metadata provider outage must not prevent source search.
         log.exception("Apple/iTunes catalog request failed for query=%r; falling back to audio sources", query)
+        if requested:
+            track = {
+                "title": requested[1], "artist": requested[0], "album": "",
+                "duration": None, "artwork_url": "", "track_url": "",
+                "metadata_score": 0, "metadata_source": "explicit query fallback",
+            }
 
     # Search using catalog-normalized artist/title when available; otherwise use the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
