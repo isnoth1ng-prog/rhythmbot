@@ -37,7 +37,6 @@ def _audio_score(result: dict, track: dict, query: str = "") -> float:
         artist_score = _similarity(uploader, track["artist"]) if uploader else 0.0
         score = max(title_score, title_only_score * 0.85 + artist_score * 0.15)
     else:
-        # Apple/iTunes is optional: score source results against the user's own query.
         score = _similarity(title, query)
         if uploader:
             score = max(score, _similarity(f"{uploader} - {title}", query))
@@ -66,7 +65,6 @@ def _fallback_metadata(query: str, candidate: dict) -> dict:
             if left.strip() and right.strip():
                 artist, title = left.strip(), right.strip()
                 break
-    # If the query itself was supplied as "artist — title", prefer that clean split.
     for separator in (" — ", " – ", " - "):
         if separator in query:
             left, right = query.split(separator, 1)
@@ -115,8 +113,6 @@ async def search_options(query: str) -> list[dict]:
         if tracks:
             return tracks[:15]
 
-    # If the catalog has no trustworthy match, search audio sources. For an
-    # explicit artist/title query require a substantially stronger match.
     fallback, seen = [], set()
     source_query = f"{requested[0]} {requested[1]}" if requested else query
     threshold = 66 if requested else 58
@@ -152,10 +148,7 @@ async def search_options(query: str) -> list[dict]:
                 if score < threshold:
                     continue
                 display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
-            else:
-                if score < threshold:
-                    continue
-                display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
+
             key = (display_title.casefold(), display_artist.casefold())
             if key in seen:
                 continue
@@ -200,7 +193,6 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 log.info("Accepted catalog metadata for %r: artist_score=%s title_score=%s",
                          query, round(ranked[0][1]), round(ranked[0][2]))
             else:
-                # Do not let a vaguely similar catalog result overwrite an explicit artist/title.
                 track = {
                     "title": requested_title,
                     "artist": requested_artist,
@@ -223,7 +215,6 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
         else:
             log.info("Apple/iTunes returned no results for query=%r; trying audio sources directly", query)
     except Exception:
-        # A metadata provider outage must not prevent source search.
         log.exception("Apple/iTunes catalog request failed for query=%r; falling back to audio sources", query)
         if requested:
             track = {
@@ -232,7 +223,6 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 "metadata_score": 0, "metadata_source": "explicit query fallback",
             }
 
-    # Search using catalog-normalized artist/title when available; otherwise use the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
     for source in ("youtube", "soundcloud"):
@@ -253,8 +243,8 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
             diagnostics.append(f"{source}: нет результатов с рабочей ссылкой")
             continue
 
-        log.info("%s top candidates: %s", source,
-                 [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
+        log.info("%s top candidates: %s",
+                 source, [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
         eligible = [(score, item) for score, item in ranked if score >= 50]
         if not eligible:
             diagnostics.append(f"{source}: совпадения слишком слабые")
@@ -271,7 +261,6 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 resolved_track = track or _fallback_metadata(query, {**candidate, **info})
                 resolved_track["artist"] = _clean(resolved_track.get("artist", ""))
                 resolved_track["title"] = _clean(resolved_track.get("title", ""))
-                # Keep catalog duration when available, but fill gaps from the actual source.
                 if not resolved_track.get("duration"):
                     resolved_track["duration"] = duration
                 return resolved_track, {
