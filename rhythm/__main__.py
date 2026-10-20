@@ -9,7 +9,6 @@ from aiogram.enums import ChatAction
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, FSInputFile
 
-from .catalog import search_tracks
 from .config import BOT_TOKEN, DOWNLOAD_DIR, prepare_runtime
 from .downloader import cleanup
 from .metadata import tag_mp3
