@@ -129,18 +129,29 @@ async def search_options(query: str) -> list[dict]:
         for item in results:
             raw_title = _clean(item.get("title") or "")
             uploader = _clean(item.get("uploader") or "")
-            title_score = _similarity(raw_title, requested[1]) if requested else _similarity(raw_title, query)
-            combined_score = _similarity(f"{uploader} - {raw_title}", query) if uploader else title_score
-            score = max(title_score, combined_score)
             if requested:
+                source_artist, source_title = uploader, raw_title
+                for separator in (" — ", " – ", " - ", " | "):
+                    if separator in raw_title:
+                        left, right = raw_title.split(separator, 1)
+                        source_artist, source_title = left.strip(), right.strip()
+                        break
+                title_score = max(_similarity(source_title, requested[1]), _similarity(raw_title, requested[1]) * 0.8)
                 artist_score = max(
                     _similarity(uploader, requested[0]) if uploader else 0,
-                    _similarity(raw_title, f"{requested[0]} - {requested[1]}"),
-                    _similarity(raw_title, f"{requested[0]} — {requested[1]}"),
+                    _similarity(source_artist, requested[0]),
                 )
+                score = title_score * 0.6 + artist_score * 0.4
                 if title_score < 70 or artist_score < 65:
                     continue
                 display_artist, display_title = requested[0], requested[1]
+            else:
+                title_score = _similarity(raw_title, query)
+                combined_score = _similarity(f"{uploader} - {raw_title}", query) if uploader else title_score
+                score = max(title_score, combined_score)
+                if score < threshold:
+                    continue
+                display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
             else:
                 if score < threshold:
                     continue
