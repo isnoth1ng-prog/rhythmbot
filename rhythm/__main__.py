@@ -54,7 +54,9 @@ def _track_key(track: dict) -> str:
 
 def _cache_init() -> None:
     global _INLINE_CACHE_DB
-    _INLINE_CACHE_DB = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", str(DOWNLOAD_DIR))) / "inline_cache.sqlite3"
+    cache_root = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or DOWNLOAD_DIR)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    _INLINE_CACHE_DB = cache_root / "inline_cache.sqlite3"
     with sqlite3.connect(_INLINE_CACHE_DB) as db:
         db.execute("CREATE TABLE IF NOT EXISTS audio_cache (track_key TEXT PRIMARY KEY, file_id TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))")
 
@@ -200,8 +202,6 @@ async def inline_search(inline_query: InlineQuery) -> None:
                     results.append(InlineQueryResultCachedAudio(
                         id=f"rh-cache-{abs(hash(key))}"[:64],
                         audio_file_id=file_id,
-                        title=(title.strip() or "Без названия")[:64],
-                        performer=(artist.strip() or "Неизвестный исполнитель")[:64],
                     ))
                     seen_ids.add(file_id)
                     if len(results) >= INLINE_RESULTS:
@@ -222,8 +222,6 @@ async def inline_search(inline_query: InlineQuery) -> None:
                     results.append(InlineQueryResultCachedAudio(
                         id=f"rh-{index}-{abs(hash(key))}"[:64],
                         audio_file_id=file_id,
-                        title=str(candidate.get("title") or "Без названия")[:64],
-                        performer=str(candidate.get("artist") or "Неизвестный исполнитель")[:64],
                     ))
                 continue
 
@@ -249,8 +247,6 @@ async def inline_search(inline_query: InlineQuery) -> None:
                     results.append(InlineQueryResultCachedAudio(
                         id=f"rh-{index}-{abs(hash(key))}"[:64],
                         audio_file_id=file_id,
-                        title=str(candidate.get("title") or track.get("title") or "Без названия")[:64],
-                        performer=str(candidate.get("artist") or track.get("artist") or "Неизвестный исполнитель")[:64],
                     ))
             except asyncio.TimeoutError:
                 log.warning("Inline cold-cache preparation exceeded time budget for %r", query_for_track)
