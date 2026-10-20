@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import os
 import sqlite3
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def _track_key(track: dict) -> str:
 
 def _cache_init() -> None:
     global _INLINE_CACHE_DB
-    _INLINE_CACHE_DB = DOWNLOAD_DIR / "inline_cache.sqlite3"
+    _INLINE_CACHE_DB = Path(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", str(DOWNLOAD_DIR))) / "inline_cache.sqlite3"
     with sqlite3.connect(_INLINE_CACHE_DB) as db:
         db.execute("CREATE TABLE IF NOT EXISTS audio_cache (track_key TEXT PRIMARY KEY, file_id TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))")
 
