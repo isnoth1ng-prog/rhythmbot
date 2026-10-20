@@ -86,43 +86,81 @@ def _fallback_metadata(query: str, candidate: dict) -> dict:
 
 
 async def search_options(query: str) -> list[dict]:
-    # Artist-only queries get a wider, but capped, selection list.
-    artist_query = _artist_query(query)
+    requested = _split_track_query(query)
+    artist_query = requested is None and _artist_query(query)
     try:
-        tracks = await search_tracks(query, limit=25 if artist_query else 10)
+        tracks = await search_tracks(query, limit=25 if artist_query else 20 if requested else 10)
     except Exception:
         log.exception("Apple/iTunes search failed for %r", query)
         tracks = []
-    if tracks:
+
+    if requested:
+        requested_artist, requested_title = requested
+        ranked = []
+        for candidate in tracks:
+            artist_score = _similarity(requested_artist, candidate.get("artist", ""))
+            title_score = _similarity(requested_title, candidate.get("title", ""))
+            if artist_score >= 68 and title_score >= 72:
+                ranked.append((title_score * 0.6 + artist_score * 0.4, candidate))
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        if ranked:
+            return [dict(item) for _, item in ranked[:10]]
+    elif tracks:
         if artist_query:
-            tracks.sort(key=lambda t: _similarity(query, t.get("artist", "")) * 0.65 + t.get("metadata_score", 0) * 0.35, reverse=True)
-            tracks = [t for t in tracks if _similarity(query, t.get("artist", "")) >= 45]
+            tracks = [t for t in tracks if _similarity(query, t.get("artist", "")) >= 60]
+            tracks.sort(key=lambda t: _similarity(query, t.get("artist", "")) * 0.7 +
+                        t.get("metadata_score", 0) * 0.3, reverse=True)
         else:
-            tracks = [t for t in tracks if t.get("metadata_score", 0) >= 45]
+            tracks = [t for t in tracks if t.get("metadata_score", 0) >= 60]
         if tracks:
             return tracks[:15]
 
-    # Apple is optional; when it has no useful match, offer source results instead.
+    # If the catalog has no trustworthy match, search audio sources. For an
+    # explicit artist/title query require a substantially stronger match.
     fallback, seen = [], set()
+    source_query = f"{requested[0]} {requested[1]}" if requested else query
+    threshold = 66 if requested else 58
     for source in ("youtube", "soundcloud"):
         try:
-            results = await asyncio.to_thread(search_source, query, source, 12 if artist_query else 6)
+            results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
         except Exception:
-            log.exception("%s search failed for %r", source, query)
+            log.exception("%s search failed for %r", source, source_query)
             continue
         for item in results:
-            title = _clean(item.get("title") or "")
-            artist = _clean(item.get("uploader") or "")
-            score = max(_similarity(title, query), _similarity(f"{artist} - {title}", query) if artist else 0)
-            key = (title.casefold(), artist.casefold())
-            if score < 48 or key in seen:
+            raw_title = _clean(item.get("title") or "")
+            uploader = _clean(item.get("uploader") or "")
+            title_score = _similarity(raw_title, requested[1]) if requested else _similarity(raw_title, query)
+            combined_score = _similarity(f"{uploader} - {raw_title}", query) if uploader else title_score
+            score = max(title_score, combined_score)
+            if requested:
+                artist_score = max(
+                    _similarity(uploader, requested[0]) if uploader else 0,
+                    _similarity(raw_title, f"{requested[0]} - {requested[1]}"),
+                    _similarity(raw_title, f"{requested[0]} — {requested[1]}"),
+                )
+                if title_score < 70 or artist_score < 65:
+                    continue
+                display_artist, display_title = requested[0], requested[1]
+            else:
+                if score < threshold:
+                    continue
+                display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
+            key = (display_title.casefold(), display_artist.casefold())
+            if key in seen:
                 continue
             seen.add(key)
-            fallback.append({"title": title or query, "artist": artist or "Неизвестный исполнитель",
-                "album": "", "duration": item.get("duration"), "artwork_url": "",
-                "track_url": item.get("url", ""), "metadata_score": score, "metadata_source": source})
+            fallback.append({
+                "title": display_title or query,
+                "artist": display_artist,
+                "album": "",
+                "duration": item.get("duration"),
+                "artwork_url": "",
+                "track_url": item.get("url", ""),
+                "metadata_score": score,
+                "metadata_source": source,
+            })
     fallback.sort(key=lambda t: t["metadata_score"], reverse=True)
-    return fallback[:15]
+    return fallback[:10 if requested else 15]
 
 
 def _split_track_query(query: str) -> tuple[str, str] | None:
