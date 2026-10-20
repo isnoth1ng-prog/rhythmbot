@@ -83,6 +83,13 @@ def _fallback_metadata(query: str, candidate: dict) -> dict:
     }
 
 
+def _metadata_priority(track: dict) -> tuple[int, float]:
+    source = str(track.get("metadata_source") or "").casefold()
+    # Trusted catalog metadata always precedes source-derived titles.
+    trusted = 1 if source in {"apple/itunes", "apple", "itunes"} else 0
+    return trusted, float(track.get("metadata_score") or 0)
+
+
 async def search_options(query: str) -> list[dict]:
     requested = _split_track_query(query)
     artist_query = requested is None and _artist_query(query)
@@ -92,17 +99,16 @@ async def search_options(query: str) -> list[dict]:
         log.exception("Apple/iTunes search failed for %r", query)
         tracks = []
 
+    catalog_ranked = []
     if requested:
         requested_artist, requested_title = requested
-        ranked = []
         for candidate in tracks:
             artist_score = _similarity(requested_artist, candidate.get("artist", ""))
             title_score = _similarity(requested_title, candidate.get("title", ""))
             if artist_score >= 68 and title_score >= 72:
-                ranked.append((title_score * 0.6 + artist_score * 0.4, candidate))
-        ranked.sort(key=lambda pair: pair[0], reverse=True)
-        if ranked:
-            return [dict(item) for _, item in ranked[:10]]
+                item = dict(candidate)
+                item["match_score"] = title_score * 0.6 + artist_score * 0.4
+                catalog_ranked.append(item)
     elif tracks:
         if artist_query:
             tracks = [t for t in tracks if _similarity(query, t.get("artist", "")) >= 60]
@@ -110,8 +116,15 @@ async def search_options(query: str) -> list[dict]:
                         t.get("metadata_score", 0) * 0.3, reverse=True)
         else:
             tracks = [t for t in tracks if t.get("metadata_score", 0) >= 60]
-        if tracks:
-            return tracks[:15]
+        catalog_ranked = [dict(t) for t in tracks]
+
+    if catalog_ranked:
+        catalog_ranked.sort(key=lambda t: (
+            float(t.get("match_score", t.get("metadata_score", 0))),
+            float(t.get("metadata_score", 0))
+        ), reverse=True)
+        # Keep trusted Apple/iTunes results first; source search is only a fallback.
+        return catalog_ranked[:15]
 
     fallback, seen = [], set()
     source_query = f"{requested[0]} {requested[1]}" if requested else query
@@ -194,14 +207,9 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                          query, round(ranked[0][1]), round(ranked[0][2]))
             else:
                 track = {
-                    "title": requested_title,
-                    "artist": requested_artist,
-                    "album": "",
-                    "duration": None,
-                    "artwork_url": "",
-                    "track_url": "",
-                    "metadata_score": 0,
-                    "metadata_source": "explicit query fallback",
+                    "title": requested_title, "artist": requested_artist, "album": "",
+                    "duration": None, "artwork_url": "", "track_url": "",
+                    "metadata_score": 0, "metadata_source": "explicit query fallback",
                 }
                 log.info("No confident catalog match for %r; preserving the user's artist/title", query)
         elif catalog_tracks:
@@ -242,7 +250,6 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
         if not ranked:
             diagnostics.append(f"{source}: нет результатов с рабочей ссылкой")
             continue
-
         log.info("%s top candidates: %s",
                  source, [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
         eligible = [(score, item) for score, item in ranked if score >= 50]
@@ -264,8 +271,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 if not resolved_track.get("duration"):
                     resolved_track["duration"] = duration
                 return resolved_track, {
-                    "path": path,
-                    "source": source,
+                    "path": path, "source": source,
                     "source_title": candidate.get("title") or info.get("title") or "",
                     "match_score": round(score),
                 }
