@@ -15,7 +15,7 @@ log = logging.getLogger("rhythm.service")
 
 
 def _clean(value: str) -> str:
-    value = re.sub(r"\\s*[-–—|]?\\s*Topic\\s*$", "", value or "", flags=re.IGNORECASE)
+    value = re.sub(r"\s*[-–—|]?\s*Topic\s*$", "", value or "", flags=re.IGNORECASE)
     return value.strip(" -–—|")
 
 
