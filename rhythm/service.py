@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from rapidfuzz import fuzz, utils
 
 from .catalog import search_tracks
@@ -52,7 +51,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
         except Exception:
             results = []
         ranked = sorted(
-            (( _audio_score(item, track), item) for item in results if item.get("url")),
+            ((_audio_score(item, track), item) for item in results if item.get("url")),
             key=lambda pair: pair[0],
             reverse=True,
         )
