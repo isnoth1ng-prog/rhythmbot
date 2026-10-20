@@ -33,6 +33,7 @@ async def search_tracks(query: str, limit: int = 8) -> list[dict]:
         tracks.append({
             "title": title,
             "artist": artist,
+            "album": (item.get("collectionName") or "").strip(),
             "duration": duration,
             "artwork_url": artwork,
             "track_url": item.get("trackViewUrl"),
