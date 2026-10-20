@@ -98,24 +98,14 @@ async def change_page(callback: CallbackQuery) -> None:
         await callback.answer("Не удалось открыть страницу.", show_alert=True)
 
 
-async def _prepare_audio(query: str, bot: Bot, chat_id: int) -> tuple[dict, str]:
+async def _download_tagged(query: str) -> tuple[dict, str]:
     track, result = await resolve_track(query)
     path = result["path"]
-    try:
-        await tag_mp3(path, track)
-        if Path(path).stat().st_size > 49 * 1024 * 1024:
-            raise RuntimeError("Файл слишком большой для отправки через Telegram.")
-        sent = await bot.send_audio(
-            chat_id=chat_id,
-            audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
-            title=track["title"][:64],
-            performer=track["artist"][:64],
-        )
-        if not sent.audio:
-            raise RuntimeError("Telegram не вернул audio file_id.")
-        return track, sent.audio.file_id
-    finally:
+    await tag_mp3(path, track)
+    if Path(path).stat().st_size > 49 * 1024 * 1024:
         cleanup(path)
+        raise RuntimeError("Файл слишком большой для отправки через Telegram.")
+    return track, path
 
 
 @dp.callback_query(F.data.startswith("rh:pick:"))
@@ -133,12 +123,15 @@ async def choose_track(callback: CallbackQuery) -> None:
         await callback.answer("Готовлю MP3…")
         await callback.message.edit_text("⬇️ Готовлю…")
         await callback.bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
-        track, file_id = await _prepare_audio(query, callback.bot, callback.message.chat.id)
-        await callback.message.answer_audio(
-            audio=file_id,
-            title=track["title"][:64],
-            performer=track["artist"][:64],
-        )
+        track, path = await _download_tagged(query)
+        try:
+            await callback.message.answer_audio(
+                audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
+                title=track["title"][:64],
+                performer=track["artist"][:64],
+            )
+        finally:
+            cleanup(path)
         _sessions.pop(sid, None)
         await callback.message.delete()
     except LookupError as exc:
@@ -172,11 +165,7 @@ async def inline_search(inline_query: InlineQuery) -> None:
                 path = None
                 temporary_message = None
                 try:
-                    track, downloaded = await resolve_track(query_for_track)
-                    path = downloaded["path"]
-                    await tag_mp3(path, track)
-                    if Path(path).stat().st_size > 49 * 1024 * 1024:
-                        raise RuntimeError("Inline audio exceeds Telegram's upload limit")
+                    track, path = await _download_tagged(query_for_track)
                     temporary_message = await inline_query.bot.send_audio(
                         chat_id=inline_query.from_user.id,
                         audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
