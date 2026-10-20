@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+downloads/
+*.mp3
+*.m4a
+*.webm
+*.part
+*.jpg
+*.png
