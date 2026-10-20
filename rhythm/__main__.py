@@ -24,7 +24,7 @@ _sessions = {}
 _ids = itertools.count(1)
 _inline_file_ids: dict[str, str] = {}
 PAGE_SIZE = 5
-INLINE_RESULTS = 5
+INLINE_RESULTS = 1
 
 
 def _keyboard(sid: int, page: int) -> InlineKeyboardMarkup:
@@ -125,11 +125,13 @@ async def choose_track(callback: CallbackQuery) -> None:
         await callback.bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
         track, path = await _download_tagged(query)
         try:
-            await callback.message.answer_audio(
+            sent = await callback.message.answer_audio(
                 audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
                 title=track["title"][:64],
                 performer=track["artist"][:64],
             )
+            if sent.audio:
+                _inline_file_ids[_track_key(track)] = sent.audio.file_id
         finally:
             cleanup(path)
         _sessions.pop(sid, None)
@@ -156,6 +158,8 @@ async def inline_search(inline_query: InlineQuery) -> None:
 
     results = []
     try:
+        # Keep inline requests bounded: preparing several full MP3s can exceed
+        # Telegram's inline-query response window and leave the result list blank.
         tracks = (await search_options(query))[:INLINE_RESULTS]
         for index, candidate in enumerate(tracks):
             key = _track_key(candidate)
@@ -171,6 +175,7 @@ async def inline_search(inline_query: InlineQuery) -> None:
                         audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
                         title=track["title"][:64],
                         performer=track["artist"][:64],
+                        disable_notification=True,
                     )
                     if temporary_message.audio:
                         file_id = temporary_message.audio.file_id
