@@ -126,7 +126,7 @@ async def search_options(query: str) -> list[dict]:
 
 
 def _split_track_query(query: str) -> tuple[str, str] | None:
-    parts = re.split(r"\\s+(?:—|–|-)\\s+|\\s+\\|\\s+", query.strip(), maxsplit=1)
+    parts = re.split(r"\s+(?:—|–|-)\s+|\s+\|\s+", query.strip(), maxsplit=1)
     if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
         return None
     return parts[0].strip(), parts[1].strip()
