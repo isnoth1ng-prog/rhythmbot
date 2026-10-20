@@ -183,65 +183,95 @@ async def inline_search(inline_query: InlineQuery) -> None:
         await inline_query.answer([], cache_time=1, is_personal=True)
         return
 
+    # Telegram expects inline answers quickly. Never serially prepare five downloads
+    # inside one inline request: that can exceed Telegram's answer deadline.
     results = []
     seen_ids = set()
     try:
-        tracks = (await asyncio.wait_for(search_options(query), timeout=6.0))[:15]
+        # First, search the existing file_id cache without waiting for external APIs.
+        normalized_query = query.casefold()
+        if _INLINE_CACHE_DB is not None:
+            with sqlite3.connect(_INLINE_CACHE_DB, timeout=1) as db:
+                rows = db.execute("SELECT track_key, file_id FROM audio_cache ORDER BY updated_at DESC LIMIT 500").fetchall()
+            tokens = [token for token in normalized_query.replace("—", " ").replace("–", " ").replace("-", " ").split() if len(token) > 1]
+            for key, file_id in rows:
+                if tokens and all(token in key for token in tokens) and file_id not in seen_ids:
+                    artist, _, title = key.partition("|")
+                    results.append(InlineQueryResultCachedAudio(
+                        id=f"rh-cache-{abs(hash(key))}"[:64],
+                        audio_file_id=file_id,
+                        title=(title.strip() or "Без названия")[:64],
+                        performer=(artist.strip() or "Неизвестный исполнитель")[:64],
+                    ))
+                    seen_ids.add(file_id)
+                    if len(results) >= INLINE_RESULTS:
+                        break
+        if results:
+            await inline_query.answer(results, cache_time=2, is_personal=True)
+            return
+
+        # Cold cache: use a strict overall budget and prepare only the top match.
+        # A multi-track sequential download loop makes Telegram return an empty list.
+        tracks = (await asyncio.wait_for(search_options(query), timeout=4.5))[:5]
         for index, candidate in enumerate(tracks):
             key = _track_key(candidate)
             file_id = _inline_file_ids.get(key) or _cache_get(key)
+            if file_id:
+                if file_id not in seen_ids:
+                    seen_ids.add(file_id)
+                    results.append(InlineQueryResultCachedAudio(
+                        id=f"rh-{index}-{abs(hash(key))}"[:64],
+                        audio_file_id=file_id,
+                        title=str(candidate.get("title") or "Без названия")[:64],
+                        performer=str(candidate.get("artist") or "Неизвестный исполнитель")[:64],
+                    ))
+                continue
 
-            # First-time tracks are prepared as real audio, not placeholder articles.
-            if not file_id:
-                query_for_track = f'{candidate.get("artist", "")} — {candidate.get("title", "")}'
-                path = None
-                temporary_message = None
-                try:
-                    track, path = await asyncio.wait_for(_download_tagged(query_for_track), timeout=22.0)
-                    temporary_message = await inline_query.bot.send_audio(
-                        chat_id=inline_query.from_user.id,
-                        audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
-                        title=track["title"][:64],
-                        performer=track["artist"][:64],
-                        disable_notification=True,
-                    )
-                    if temporary_message.audio:
-                        file_id = temporary_message.audio.file_id
-                        _inline_file_ids[key] = file_id
-                        _inline_file_ids[_track_key(track)] = file_id
-                        _cache_set(key, file_id)
-                        _cache_set(_track_key(track), file_id)
-                except asyncio.TimeoutError:
-                    log.warning("Inline audio preparation timed out for %r", query_for_track)
-                    continue
-                except Exception:
-                    log.exception("Could not prepare inline audio for %r", query_for_track)
-                    continue
-                finally:
-                    cleanup(path)
-                    if temporary_message:
-                        try:
-                            await inline_query.bot.delete_message(
-                                chat_id=inline_query.from_user.id,
-                                message_id=temporary_message.message_id,
-                            )
-                        except Exception:
-                            log.debug("Could not delete temporary inline upload", exc_info=True)
+            # Only one download attempt, bounded so we can answer before Telegram times out.
+            query_for_track = f'{candidate.get("artist", "")} — {candidate.get("title", "")}'
+            path = None
+            temporary_message = None
+            try:
+                track, path = await asyncio.wait_for(_download_tagged(query_for_track), timeout=4.0)
+                temporary_message = await inline_query.bot.send_audio(
+                    chat_id=inline_query.from_user.id,
+                    audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
+                    title=track["title"][:64],
+                    performer=track["artist"][:64],
+                    disable_notification=True,
+                )
+                if temporary_message.audio:
+                    file_id = temporary_message.audio.file_id
+                    _inline_file_ids[key] = file_id
+                    _inline_file_ids[_track_key(track)] = file_id
+                    _cache_set(key, file_id)
+                    _cache_set(_track_key(track), file_id)
+                    results.append(InlineQueryResultCachedAudio(
+                        id=f"rh-{index}-{abs(hash(key))}"[:64],
+                        audio_file_id=file_id,
+                        title=str(candidate.get("title") or track.get("title") or "Без названия")[:64],
+                        performer=str(candidate.get("artist") or track.get("artist") or "Неизвестный исполнитель")[:64],
+                    ))
+            except asyncio.TimeoutError:
+                log.warning("Inline cold-cache preparation exceeded time budget for %r", query_for_track)
+            except Exception:
+                log.exception("Could not prepare inline audio for %r", query_for_track)
+            finally:
+                cleanup(path)
+                if temporary_message:
+                    try:
+                        await inline_query.bot.delete_message(
+                            chat_id=inline_query.from_user.id,
+                            message_id=temporary_message.message_id,
+                        )
+                    except Exception:
+                        log.debug("Could not delete temporary inline upload", exc_info=True)
+            # Never start another download in the same inline query.
+            break
 
-            if file_id and file_id not in seen_ids:
-                seen_ids.add(file_id)
-                results.append(InlineQueryResultCachedAudio(
-                    id=f"rh-{index}-{abs(hash(key))}"[:64],
-                    audio_file_id=file_id,
-                    title=str(candidate.get("title") or "Без названия")[:64],
-                    performer=str(candidate.get("artist") or "Неизвестный исполнитель")[:64],
-                ))
-            if len(results) >= INLINE_RESULTS:
-                break
-
-        await inline_query.answer(results, cache_time=2, is_personal=True)
+        await inline_query.answer(results, cache_time=1, is_personal=True)
     except asyncio.TimeoutError:
-        log.warning("Inline catalog search timed out for query=%r", query)
+        log.warning("Inline search timed out for query=%r", query)
         try:
             await inline_query.answer(results, cache_time=1, is_personal=True)
         except Exception:
