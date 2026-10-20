@@ -11,10 +11,11 @@ def _options() -> dict:
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
-        "extract_flat": False,
-        "socket_timeout": 15,
+        "extract_flat": "in_playlist",
+        "socket_timeout": 20,
         "retries": 1,
         "fragment_retries": 1,
+        "ignoreerrors": True,
     }
     if YT_PROXY:
         opts["proxy"] = YT_PROXY
@@ -23,21 +24,37 @@ def _options() -> dict:
     return opts
 
 
-def search_source(query: str, source: str, limit: int = 5) -> list[dict]:
-    prefix = "ytsearch" if source == "youtube" else "scsearch"
-    opts = _options()
-    opts["extract_flat"] = "in_playlist"
-    with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"{prefix}{limit}:{query}", download=False)
-    entries = (info or {}).get("entries") or []
-    results = []
-    for entry in entries:
+def search_source(query: str, source: str, limit: int = 8) -> list[dict]:
+    if source == "youtube":
+        search_term = f"ytsearch{limit}:{query}"
+    elif source == "soundcloud":
+        search_term = f"scsearch{limit}:{query}"
+    else:
+        raise ValueError(f"Unsupported audio source: {source}")
+
+    with YoutubeDL(_options()) as ydl:
+        info = ydl.extract_info(search_term, download=False)
+
+    results: list[dict] = []
+    for entry in (info or {}).get("entries") or []:
         if not entry:
             continue
-        url = entry.get("webpage_url") or entry.get("original_url") or entry.get("url")
-        if not url and entry.get("id"):
-            if source == "youtube":
-                url = f"https://www.youtube.com/watch?v={entry['id']}"
+        entry_id = entry.get("id")
+        url = entry.get("webpage_url") or entry.get("original_url")
+        if source == "youtube":
+            if entry_id:
+                url = f"https://www.youtube.com/watch?v={entry_id}"
+            elif url and not url.startswith(("https://", "http://")):
+                continue
+        else:
+            # SoundCloud flat search results should expose a canonical URL.
+            if not url:
+                url = entry.get("url")
+            if url and not url.startswith(("https://", "http://")):
+                continue
+
+        if not url:
+            continue
         results.append({
             "source": source,
             "url": url,
