@@ -13,7 +13,6 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup,
     InlineKeyboardButton, InlineQuery, InlineQueryResultCachedAudio,
-    InlineQueryResultArticle, InputTextMessageContent,
 )
 from .config import BOT_TOKEN, DOWNLOAD_DIR, prepare_runtime
 from .downloader import cleanup
@@ -181,22 +180,58 @@ async def choose_track(callback: CallbackQuery) -> None:
 async def inline_search(inline_query: InlineQuery) -> None:
     query = (inline_query.query or "").strip()
     if len(query) < 2:
-        await inline_query.answer([], cache_time=2, is_personal=True)
+        await inline_query.answer([], cache_time=1, is_personal=True)
         return
 
+    results = []
+    seen_ids = set()
     try:
-        # Avoid downloading inside inline requests; Telegram may time out.
-        tracks = (await asyncio.wait_for(search_options(query), timeout=4.5))[:15]
-        results = []
-        seen_ids = set()
-
+        tracks = (await asyncio.wait_for(search_options(query), timeout=6.0))[:15]
         for index, candidate in enumerate(tracks):
             key = _track_key(candidate)
             file_id = _inline_file_ids.get(key) or _cache_get(key)
+
+            # First-time tracks are prepared as real audio, not placeholder articles.
+            if not file_id:
+                query_for_track = f'{candidate.get("artist", "")} — {candidate.get("title", "")}'
+                path = None
+                temporary_message = None
+                try:
+                    track, path = await asyncio.wait_for(_download_tagged(query_for_track), timeout=22.0)
+                    temporary_message = await inline_query.bot.send_audio(
+                        chat_id=inline_query.from_user.id,
+                        audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
+                        title=track["title"][:64],
+                        performer=track["artist"][:64],
+                        disable_notification=True,
+                    )
+                    if temporary_message.audio:
+                        file_id = temporary_message.audio.file_id
+                        _inline_file_ids[key] = file_id
+                        _inline_file_ids[_track_key(track)] = file_id
+                        _cache_set(key, file_id)
+                        _cache_set(_track_key(track), file_id)
+                except asyncio.TimeoutError:
+                    log.warning("Inline audio preparation timed out for %r", query_for_track)
+                    continue
+                except Exception:
+                    log.exception("Could not prepare inline audio for %r", query_for_track)
+                    continue
+                finally:
+                    cleanup(path)
+                    if temporary_message:
+                        try:
+                            await inline_query.bot.delete_message(
+                                chat_id=inline_query.from_user.id,
+                                message_id=temporary_message.message_id,
+                            )
+                        except Exception:
+                            log.debug("Could not delete temporary inline upload", exc_info=True)
+
             if file_id and file_id not in seen_ids:
                 seen_ids.add(file_id)
                 results.append(InlineQueryResultCachedAudio(
-                    id=f"rh-a-{index}-{abs(hash(key))}"[:64],
+                    id=f"rh-{index}-{abs(hash(key))}"[:64],
                     audio_file_id=file_id,
                     title=str(candidate.get("title") or "Без названия")[:64],
                     performer=str(candidate.get("artist") or "Неизвестный исполнитель")[:64],
@@ -204,33 +239,17 @@ async def inline_search(inline_query: InlineQuery) -> None:
             if len(results) >= INLINE_RESULTS:
                 break
 
-        # On cache miss, show actionable results immediately instead of an empty list.
-        if len(results) < INLINE_RESULTS:
-            for index, candidate in enumerate(tracks):
-                key = _track_key(candidate)
-                if _cache_get(key) or _inline_file_ids.get(key):
-                    continue
-                artist = str(candidate.get("artist") or "Неизвестный исполнитель")
-                title = str(candidate.get("title") or "Без названия")
-                results.append(InlineQueryResultArticle(
-                    id=f"rh-p-{index}-{abs(hash(key))}"[:64],
-                    title=f"{artist} — {title}"[:128],
-                    description="Сначала подготовь трек в чате с Rhythm",
-                    input_message_content=InputTextMessageContent(
-                        message_text=f"Этот трек ещё не подготовлен для инлайна. Открой Rhythm и отправь запрос:\n{artist} — {title}"
-                    ),
-                ))
-                if len(results) >= INLINE_RESULTS:
-                    break
-
-        await inline_query.answer(results, cache_time=3, is_personal=True)
+        await inline_query.answer(results, cache_time=2, is_personal=True)
     except asyncio.TimeoutError:
         log.warning("Inline catalog search timed out for query=%r", query)
-        await inline_query.answer([], cache_time=1, is_personal=True)
+        try:
+            await inline_query.answer(results, cache_time=1, is_personal=True)
+        except Exception:
+            pass
     except Exception:
         log.exception("Inline search failed for query=%r", query)
         try:
-            await inline_query.answer([], cache_time=1, is_personal=True)
+            await inline_query.answer(results, cache_time=1, is_personal=True)
         except Exception:
             pass
 
