@@ -192,6 +192,8 @@ async def inline_search(inline_query: InlineQuery) -> None:
                 results.append(InlineQueryResultCachedAudio(
                     id=f"rh-{index}-{abs(hash(key))}"[:64],
                     audio_file_id=file_id,
+                    title=str(candidate.get("title") or "Без названия")[:64],
+                    performer=str(candidate.get("artist") or "Неизвестный исполнитель")[:64],
                 ))
         await inline_query.answer(results, cache_time=15, is_personal=True)
     except Exception:
