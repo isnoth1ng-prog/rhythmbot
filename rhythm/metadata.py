@@ -27,6 +27,14 @@ async def _cover_bytes(url: str) -> bytes | None:
 
 
 async def tag_mp3(path: str, track: dict) -> None:
+    # Remove YouTube auto-generated channel suffixes from ID3 fields.
+    import re
+    track = dict(track)
+    for field in ("title", "artist", "album"):
+        value = str(track.get(field) or "").strip()
+        value = re.sub(r"\\s*[-–—|]?\\s*Topic\\s*$", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\\s*\\((?:official\\s+)?(?:audio|video|lyrics?)\\)\\s*$", "", value, flags=re.IGNORECASE)
+        track[field] = value.strip(" -–—|")
     cover = await _cover_bytes(track.get("artwork_url", ""))
     def write_tags() -> None:
         try:
