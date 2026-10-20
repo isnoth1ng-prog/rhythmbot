@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from yt_dlp import YoutubeDL
 
 from .config import COOKIE_FILE, YT_PROXY
-
-_POOL = ThreadPoolExecutor(max_workers=2)
 
 
 def _options() -> dict:
