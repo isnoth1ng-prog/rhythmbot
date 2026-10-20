@@ -51,7 +51,7 @@ def _track_key(track: dict) -> str:
 
 @dp.message(CommandStart())
 async def start(message: Message) -> None:
-    await message.answer("Йоу, это Rhythm 🎧\nНапиши исполнителя или «исполнитель — название» и выбери трек.")
+    await message.answer("🎧 Rhythm\n\nИщи музыку и получай треки в MP3 с обложкой.\n\nНапиши название песни или «исполнитель — трек» и выбери нужный вариант.\n\nМожно искать и через инлайн: @имя_бота название трека")
 
 
 @dp.message(Command("help"))
