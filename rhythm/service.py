@@ -201,7 +201,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 combined = title_score * 0.7 + artist_score * 0.3
                 ranked.append((combined, artist_score, title_score, candidate))
             ranked.sort(key=lambda item: item[0], reverse=True)
-            if ranked and ranked[0][1] >= 50 and ranked[0][2] >= 65:
+            if ranked and ranked[0][1] >= 62 and ranked[0][2] >= 72:
                 track = dict(ranked[0][3])
                 log.info("Accepted catalog metadata for %r: artist_score=%s title_score=%s",
                          query, round(ranked[0][1]), round(ranked[0][2]))
@@ -252,7 +252,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
             continue
         log.info("%s top candidates: %s",
                  source, [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
-        eligible = [(score, item) for score, item in ranked if score >= 50]
+        eligible = [(score, item) for score, item in ranked if score >= 62]
         if not eligible:
             diagnostics.append(f"{source}: совпадения слишком слабые")
             continue
