@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from rapidfuzz import fuzz, utils
 
@@ -11,6 +12,15 @@ from .downloader import download_mp3, cleanup
 from .sources import search_source
 
 log = logging.getLogger("rhythm.service")
+
+
+def _clean(value: str) -> str:
+    value = re.sub(r"\\s*[-–—|]?\\s*Topic\\s*$", "", value or "", flags=re.IGNORECASE)
+    return value.strip(" -–—|")
+
+
+def _artist_query(query: str) -> bool:
+    return not any(sep in query for sep in (" — ", " – ", " - ", " | ")) and len(query.split()) <= 4
 
 
 def _similarity(left: str, right: str) -> float:
@@ -47,8 +57,8 @@ def _audio_score(result: dict, track: dict, query: str = "") -> float:
 
 
 def _fallback_metadata(query: str, candidate: dict) -> dict:
-    source_title = (candidate.get("title") or query).strip()
-    artist = (candidate.get("uploader") or "").strip()
+    source_title = _clean((candidate.get("title") or query).strip())
+    artist = _clean((candidate.get("uploader") or "").strip())
     title = source_title
     for separator in (" — ", " – ", " - ", " | "):
         if separator in source_title:
@@ -73,6 +83,46 @@ def _fallback_metadata(query: str, candidate: dict) -> dict:
         "metadata_score": 0,
         "metadata_source": "audio source fallback",
     }
+
+
+async def search_options(query: str) -> list[dict]:
+    # Artist-only queries get a wider, but capped, selection list.
+    artist_query = _artist_query(query)
+    try:
+        tracks = await search_tracks(query, limit=25 if artist_query else 10)
+    except Exception:
+        log.exception("Apple/iTunes search failed for %r", query)
+        tracks = []
+    if tracks:
+        if artist_query:
+            tracks.sort(key=lambda t: _similarity(query, t.get("artist", "")) * 0.65 + t.get("metadata_score", 0) * 0.35, reverse=True)
+            tracks = [t for t in tracks if _similarity(query, t.get("artist", "")) >= 45]
+        else:
+            tracks = [t for t in tracks if t.get("metadata_score", 0) >= 45]
+        if tracks:
+            return tracks[:15]
+
+    # Apple is optional; when it has no useful match, offer source results instead.
+    fallback, seen = [], set()
+    for source in ("youtube", "soundcloud"):
+        try:
+            results = await asyncio.to_thread(search_source, query, source, 12 if artist_query else 6)
+        except Exception:
+            log.exception("%s search failed for %r", source, query)
+            continue
+        for item in results:
+            title = _clean(item.get("title") or "")
+            artist = _clean(item.get("uploader") or "")
+            score = max(_similarity(title, query), _similarity(f"{artist} - {title}", query) if artist else 0)
+            key = (title.casefold(), artist.casefold())
+            if score < 48 or key in seen:
+                continue
+            seen.add(key)
+            fallback.append({"title": title or query, "artist": artist or "Неизвестный исполнитель",
+                "album": "", "duration": item.get("duration"), "artwork_url": "",
+                "track_url": item.get("url", ""), "metadata_score": score, "metadata_source": source})
+    fallback.sort(key=lambda t: t["metadata_score"], reverse=True)
+    return fallback[:15]
 
 
 async def resolve_track(query: str) -> tuple[dict, dict]:
@@ -130,6 +180,8 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                     diagnostics.append(f"{source}: длительность вне лимита")
                     continue
                 resolved_track = track or _fallback_metadata(query, {**candidate, **info})
+                resolved_track["artist"] = _clean(resolved_track.get("artist", ""))
+                resolved_track["title"] = _clean(resolved_track.get("title", ""))
                 # Keep catalog duration when available, but fill gaps from the actual source.
                 if not resolved_track.get("duration"):
                     resolved_track["duration"] = duration
