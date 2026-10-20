@@ -195,10 +195,9 @@ async def inline_search(inline_query: InlineQuery) -> None:
         if _INLINE_CACHE_DB is not None:
             with sqlite3.connect(_INLINE_CACHE_DB, timeout=1) as db:
                 rows = db.execute("SELECT track_key, file_id FROM audio_cache ORDER BY updated_at DESC LIMIT 500").fetchall()
-            tokens = [token for token in normalized_query.replace("—", " ").replace("–", " ").replace("-", " ").split() if len(token) > 1]
+            tokens = [token for token in normalized_query.replace("—", " ").replace("–", " ").replace("-", " ").replace("|", " ").split() if len(token) > 1]
             for key, file_id in rows:
                 if tokens and all(token in key for token in tokens) and file_id not in seen_ids:
-                    artist, _, title = key.partition("|")
                     results.append(InlineQueryResultCachedAudio(
                         id=f"rh-cache-{abs(hash(key))}"[:64],
                         audio_file_id=file_id,
@@ -206,8 +205,10 @@ async def inline_search(inline_query: InlineQuery) -> None:
                     seen_ids.add(file_id)
                     if len(results) >= INLINE_RESULTS:
                         break
+        log.info("Inline cache query=%r rows=%d results=%d", query, len(rows) if _INLINE_CACHE_DB is not None else 0, len(results))
         if results:
             await inline_query.answer(results, cache_time=2, is_personal=True)
+            log.info("Inline answer sent from cache query=%r results=%d", query, len(results))
             return
 
         # Cold cache: use a strict overall budget and prepare only the top match.
@@ -266,6 +267,7 @@ async def inline_search(inline_query: InlineQuery) -> None:
             break
 
         await inline_query.answer(results, cache_time=1, is_personal=True)
+        log.info("Inline answer sent after cold-cache attempt query=%r results=%d", query, len(results))
     except asyncio.TimeoutError:
         log.warning("Inline search timed out for query=%r", query)
         try:
