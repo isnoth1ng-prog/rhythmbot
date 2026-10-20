@@ -17,14 +17,20 @@ def _similarity(left: str, right: str) -> float:
     return float(fuzz.WRatio(left, right, processor=utils.default_process))
 
 
-def _audio_score(result: dict, track: dict) -> float:
+def _audio_score(result: dict, track: dict, query: str = "") -> float:
     title = result.get("title") or ""
     uploader = result.get("uploader") or ""
-    expected = f'{track.get("artist", "")} - {track.get("title", "")}'
-    title_score = _similarity(title, expected)
-    title_only_score = _similarity(title, track.get("title", ""))
-    artist_score = _similarity(uploader, track.get("artist", "")) if uploader else 0.0
-    score = max(title_score, title_only_score * 0.85 + artist_score * 0.15)
+    if track.get("artist") and track.get("title"):
+        expected = f'{track["artist"]} - {track["title"]}'
+        title_score = _similarity(title, expected)
+        title_only_score = _similarity(title, track["title"])
+        artist_score = _similarity(uploader, track["artist"]) if uploader else 0.0
+        score = max(title_score, title_only_score * 0.85 + artist_score * 0.15)
+    else:
+        # Apple/iTunes is optional: score source results against the user's own query.
+        score = _similarity(title, query)
+        if uploader:
+            score = max(score, _similarity(f"{uploader} - {title}", query))
 
     source_duration = result.get("duration")
     target_duration = track.get("duration")
@@ -40,34 +46,55 @@ def _audio_score(result: dict, track: dict) -> float:
     return score
 
 
+def _fallback_metadata(query: str, candidate: dict) -> dict:
+    source_title = (candidate.get("title") or query).strip()
+    artist = (candidate.get("uploader") or "").strip()
+    title = source_title
+    for separator in (" — ", " – ", " - ", " | "):
+        if separator in source_title:
+            left, right = source_title.split(separator, 1)
+            if left.strip() and right.strip():
+                artist, title = left.strip(), right.strip()
+                break
+    # If the query itself was supplied as "artist — title", prefer that clean split.
+    for separator in (" — ", " – ", " - "):
+        if separator in query:
+            left, right = query.split(separator, 1)
+            if left.strip() and right.strip():
+                artist, title = left.strip(), right.strip()
+                break
+    return {
+        "title": title or query,
+        "artist": artist or "Неизвестный исполнитель",
+        "album": "",
+        "duration": candidate.get("duration"),
+        "artwork_url": "",
+        "track_url": candidate.get("url", ""),
+        "metadata_score": 0,
+        "metadata_source": "audio source fallback",
+    }
+
+
 async def resolve_track(query: str) -> tuple[dict, dict]:
+    track = None
     try:
         catalog_tracks = await search_tracks(query)
-    except Exception as exc:
-        log.exception("Apple/iTunes catalog request failed for query=%r", query)
-        raise LookupError(
-            "Не удалось связаться с каталогом Apple/iTunes. Попробуй ещё раз чуть позже."
-        ) from exc
+        if catalog_tracks:
+            best = catalog_tracks[0]
+            if best.get("metadata_score", 0) >= 38:
+                track = best
+                track["album"] = track.get("album") or ""
+            else:
+                log.info("Apple/iTunes match too weak for query=%r score=%s; trying audio sources directly",
+                         query, best.get("metadata_score"))
+        else:
+            log.info("Apple/iTunes returned no results for query=%r; trying audio sources directly", query)
+    except Exception:
+        # A metadata provider outage must not prevent source search.
+        log.exception("Apple/iTunes catalog request failed for query=%r; falling back to audio sources", query)
 
-    if not catalog_tracks:
-        raise LookupError(
-            "Apple/iTunes не нашёл этот запрос. Напиши «исполнитель — название» "
-            "или попробуй оригинальное написание."
-        )
-
-    track = catalog_tracks[0]
-    if track["metadata_score"] < 38:
-        log.info(
-            "Low catalog score query=%r top=%r score=%s",
-            query, f'{track["artist"]} - {track["title"]}', track["metadata_score"]
-        )
-        raise LookupError(
-            "Не смог уверенно определить трек в Apple/iTunes. Укажи исполнителя "
-            "и название через тире."
-        )
-    track["album"] = track.get("album") or ""
-
-    search_query = f'{track["artist"]} {track["title"]}'
+    # Search using catalog-normalized artist/title when available; otherwise use the raw user query.
+    search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
     for source in ("youtube", "soundcloud"):
         try:
@@ -79,7 +106,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
             continue
 
         ranked = sorted(
-            ((_audio_score(item, track), item) for item in results if item.get("url")),
+            ((_audio_score(item, track or {}, query), item) for item in results if item.get("url")),
             key=lambda pair: pair[0],
             reverse=True,
         )
@@ -87,11 +114,8 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
             diagnostics.append(f"{source}: нет результатов с рабочей ссылкой")
             continue
 
-        log.info(
-            "%s top candidates: %s",
-            source,
-            [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]],
-        )
+        log.info("%s top candidates: %s", source,
+                 [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
         eligible = [(score, item) for score, item in ranked if score >= 50]
         if not eligible:
             diagnostics.append(f"{source}: совпадения слишком слабые")
@@ -105,17 +129,19 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                     cleanup(path)
                     diagnostics.append(f"{source}: длительность вне лимита")
                     continue
-                return track, {
+                resolved_track = track or _fallback_metadata(query, {**candidate, **info})
+                # Keep catalog duration when available, but fill gaps from the actual source.
+                if not resolved_track.get("duration"):
+                    resolved_track["duration"] = duration
+                return resolved_track, {
                     "path": path,
                     "source": source,
                     "source_title": candidate.get("title") or info.get("title") or "",
                     "match_score": round(score),
                 }
             except Exception as exc:
-                log.warning(
-                    "Download candidate failed source=%s score=%s title=%r error=%s",
-                    source, round(score), candidate.get("title"), exc, exc_info=True,
-                )
+                log.warning("Download candidate failed source=%s score=%s title=%r error=%s",
+                            source, round(score), candidate.get("title"), exc, exc_info=True)
                 diagnostics.append(f"{source}: скачивание не удалось ({type(exc).__name__})")
 
     log.error("No track found for query=%r; diagnostics=%s", query, diagnostics)
