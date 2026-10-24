@@ -14,6 +14,7 @@ from logging.handlers import RotatingFileHandler
 DATA_PATH = "data"
 TEMP_PATH = "temp"
 
+os.makedirs(DATA_PATH, exist_ok=True)
 os.makedirs(TEMP_PATH, exist_ok=True)
 LOG_FILE = os.path.join(DATA_PATH, "bot.log")
 load_dotenv(dotenv_path=os.path.join(DATA_PATH, ".env"))
@@ -61,7 +62,7 @@ FUZZY_DUPLICATE_THRESHOLD: int = int(os.getenv('FUZZY_DUPLICATE_THRESHOLD', 90))
 
 MAX_FILE_SIZE_MB: int = int(os.getenv('MAX_FILE_SIZE_MB', 50))
 MAX_SONG_DURATION_MIN: int = int(os.getenv('MAX_SONG_DURATION_MIN', 15))
-ALLOW_PRIVATE_CHAT: bool = os.getenv('ALLOW_PRIVATE_CHAT', 'false').lower() == 'true'
+ALLOW_PRIVATE_CHAT: bool = os.getenv('ALLOW_PRIVATE_CHAT', 'true').lower() == 'true'
 INFO_EXPIRATION_HOURS: int = int(os.getenv('INFO_EXPIRATION_HOURS', 10))
 ANTI_SPAM_INTERVAL: int = int(os.getenv('ANTI_SPAM_INTERVAL', 15))
 ANTI_SPAM_CALLBACK_INTERVAL: float = float(os.getenv('ANTI_SPAM_CALLBACK_INTERVAL', 1.0))
