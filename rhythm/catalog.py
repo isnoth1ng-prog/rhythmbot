@@ -37,6 +37,7 @@ async def search_tracks(query: str, limit: int = 8) -> list[dict]:
             "duration": duration,
             "artwork_url": artwork,
             "track_url": item.get("trackViewUrl"),
+            "preview_url": item.get("previewUrl") or "",
             "metadata_score": _score(query, label),
             "metadata_source": "Apple/iTunes",
         })
