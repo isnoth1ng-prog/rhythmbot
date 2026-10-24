@@ -66,7 +66,7 @@ def _audio_score(result: dict, track: dict, query: str = "") -> float:
         # If the title is not an almost exact match, require evidence that the
         # upload belongs to the requested artist.
         artist_in_title = expected_score >= 82
-        if artist_score < 45 and not artist_in_title and title_only_score < 90:
+        if artist_score < 45 and not artist_in_title:
             return 0.0
 
         score = max(expected_score, title_only_score * 0.88)
