@@ -27,6 +27,7 @@ _ids = itertools.count(1)
 _inline_file_ids: dict[str, str] = {}
 PAGE_SIZE = 5
 INLINE_RESULTS = 5
+INLINE_CACHE_CHANNEL_ID = os.getenv("INLINE_CACHE_CHANNEL_ID", "").strip()
 _INLINE_CACHE_DB = None
 
 
@@ -74,6 +75,21 @@ def _cache_set(key: str, file_id: str) -> None:
         return
     with sqlite3.connect(_INLINE_CACHE_DB, timeout=2) as db:
         db.execute("INSERT INTO audio_cache(track_key, file_id, updated_at) VALUES (?, ?, unixepoch()) ON CONFLICT(track_key) DO UPDATE SET file_id=excluded.file_id, updated_at=excluded.updated_at", (key, file_id))
+
+
+async def _store_inline_audio(bot: Bot, track: dict, file_id: str) -> str:
+    """Store audio in the private cache channel so its Telegram file_id persists."""
+    if not INLINE_CACHE_CHANNEL_ID:
+        return file_id
+    cached = await bot.send_audio(
+        chat_id=INLINE_CACHE_CHANNEL_ID,
+        audio=file_id,
+        title=str(track.get("title") or "Без названия")[:64],
+        performer=str(track.get("artist") or "Неизвестный исполнитель")[:64],
+    )
+    if not cached.audio:
+        raise RuntimeError("Telegram did not return audio after storing it in cache channel")
+    return cached.audio.file_id
 
 
 @dp.message(CommandStart())
@@ -158,9 +174,14 @@ async def choose_track(callback: CallbackQuery) -> None:
                 performer=track["artist"][:64],
             )
             if sent.audio:
-                _inline_file_ids[_track_key(track)] = sent.audio.file_id
-                _cache_set(_track_key(track), sent.audio.file_id)
-                _cache_set(_track_key(selected), sent.audio.file_id)
+                try:
+                    cached_file_id = await _store_inline_audio(callback.bot, track, sent.audio.file_id)
+                except Exception:
+                    log.exception("Could not store track in inline cache channel")
+                    cached_file_id = sent.audio.file_id
+                _inline_file_ids[_track_key(track)] = cached_file_id
+                _cache_set(_track_key(track), cached_file_id)
+                _cache_set(_track_key(selected), cached_file_id)
         finally:
             cleanup(path)
         _sessions.pop(sid, None)
@@ -217,8 +238,8 @@ async def inline_search(inline_query: InlineQuery) -> None:
                 description=" · ".join(details)[:255] or "Первый раз? Получи MP3 в чате с Rhythm",
                 input_message_content=InputTextMessageContent(
                     message_text=(
-                        f"Rhythm — этот трек ещё не сохранён для мгновенной отправки.\n"
-                        f"Открой чат с Rhythm и отправь запрос:\n{artist} — {title}"
+                        f"{artist} — {title}\n"
+                        f"Чтобы подготовить этот трек для мгновенной отправки, один раз найди его в чате с Rhythm."
                     )
                 ),
             ))
