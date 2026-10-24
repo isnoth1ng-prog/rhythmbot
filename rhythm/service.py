@@ -154,7 +154,10 @@ async def search_options(query: str) -> list[dict]:
         return []
 
     requested = _split_track_query(query)
-    artist_query = requested is None and _artist_query(query)
+    # Short two-word queries are often song titles (e.g. «Доедешь пиши»),
+    # not artist names. Treat only a single token as artist-only; multi-word
+    # queries must also be ranked against track titles in Apple/Deezer/YouTube Music.
+    artist_query = requested is None and _artist_query(query) and len(query.split()) == 1
     # Start Apple/iTunes and YouTube Music requests together so inline search
     # does not wait for one remote catalog before even starting the next.
     source_query = f"{requested[0]} {requested[1]}" if requested else query
