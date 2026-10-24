@@ -291,8 +291,12 @@ async def search_options(query: str) -> list[dict]:
             item["artist"], item["title"] = artist, title
             merged[key] = item
         else:
-            # Keep the source URL if catalog metadata had no audio resolution URL.
-            if not existing.get("track_url") and item.get("track_url"):
+            # Catalog links are useful metadata links, but audio resolution must
+            # retain the YouTube Music URL even when the catalog has a store URL.
+            if item.get("audio_source") == "youtube_music" and item.get("track_url"):
+                existing["track_url"] = item["track_url"]
+                existing["audio_source"] = "youtube_music"
+            elif not existing.get("track_url") and item.get("track_url"):
                 existing["track_url"] = item["track_url"]
                 existing["audio_source"] = item.get("audio_source")
             if _metadata_priority(item) > _metadata_priority(existing):
