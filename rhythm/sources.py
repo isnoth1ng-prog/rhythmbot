@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from yt_dlp import YoutubeDL
+from ytmusicapi import YTMusic
 
 from .config import COOKIE_FILE, YT_PROXY
 
@@ -25,7 +26,29 @@ def _options() -> dict:
 
 
 def search_source(query: str, source: str, limit: int = 8) -> list[dict]:
-    if source == "youtube":
+    if source == "youtube_music":
+        # YouTube Music returns structured song/artist metadata instead of
+        # noisy arbitrary video titles. Public catalogue search needs no login.
+        music = YTMusic()
+        entries = music.search(query, filter="songs", limit=limit)
+        results: list[dict] = []
+        for entry in entries:
+            video_id = entry.get("videoId")
+            if not video_id:
+                continue
+            artists = entry.get("artists") or []
+            artist = ", ".join(
+                item.get("name", "").strip() for item in artists if item.get("name")
+            )
+            results.append({
+                "source": source,
+                "url": f"https://music.youtube.com/watch?v={video_id}",
+                "title": entry.get("title") or "",
+                "duration": entry.get("duration_seconds"),
+                "uploader": artist,
+            })
+        return results
+    elif source == "youtube":
         search_term = f"ytsearch{limit}:{query}"
     elif source == "soundcloud":
         search_term = f"scsearch{limit}:{query}"
