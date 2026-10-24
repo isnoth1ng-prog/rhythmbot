@@ -49,7 +49,7 @@ def _keyboard(sid: int, page: int) -> InlineKeyboardMarkup:
 
 
 def _track_key(track: dict) -> str:
-    return f'{track.get("artist", "").strip().casefold()}|{track.get("title", "").strip().casefold()}'
+    return f'ytmusic-v1|{track.get("artist", "").strip().casefold()}|{track.get("title", "").strip().casefold()}'
 
 
 def _cache_init() -> None:
@@ -166,21 +166,11 @@ async def choose_track(callback: CallbackQuery) -> None:
         _sessions.pop(sid, None)
         await callback.message.delete()
     except LookupError as exc:
-        # If a full download is blocked/unavailable, fall back to the official
-        # Apple/iTunes preview URL when one exists.
-        preview_url = (selected or {}).get("preview_url") if "selected" in locals() else None
-        if preview_url:
-            try:
-                await callback.message.answer_audio(
-                    audio=preview_url,
-                    title=str(selected.get("title") or "Превью")[:64],
-                    performer=str(selected.get("artist") or "")[:64],
-                    disable_notification=True,
-                )
-                await callback.message.delete()
-                log.info("Sent Apple/iTunes preview fallback for %r", query if "query" in locals() else "")
-                return
-            except Exception:
+        try:
+            await callback.message.edit_text(str(exc))
+        except Exception:
+            pass
+    except Exception:
                 log.exception("Apple/iTunes preview fallback failed")
         try:
             await callback.message.edit_text(str(exc))
@@ -230,8 +220,6 @@ async def inline_search(inline_query: InlineQuery) -> None:
         # Cold cache: use a strict overall budget and prepare only the top match.
         # A multi-track sequential download loop makes Telegram return an empty list.
         tracks = (await asyncio.wait_for(search_options(query), timeout=4.5))[:INLINE_RESULTS]
-        # Apple/iTunes preview URLs are quick and don't require a blocked
-        # YouTube download. Return them as playable inline audio results.
         for index, candidate in enumerate(tracks):
             key = _track_key(candidate)
             file_id = _inline_file_ids.get(key) or _cache_get(key)
@@ -243,18 +231,8 @@ async def inline_search(inline_query: InlineQuery) -> None:
                         audio_file_id=file_id,
                     ))
                 continue
-            preview_url = candidate.get("preview_url")
-            if preview_url:
-                results.append(InlineQueryResultAudio(
-                    id=f"rh-preview-{index}-{abs(hash(key))}"[:64],
-                    audio_url=preview_url,
-                    title=str(candidate.get("title") or "Превью")[:64],
-                    performer=str(candidate.get("artist") or "")[:64],
-                    audio_duration=min(int(candidate.get("duration") or 30), 30),
-                ))
-                continue
 
-            # Only one full-download attempt, bounded so we can answer before Telegram times out.
+            # Only YouTube Music downloads are allowed; no preview or alternate-source fallback.
             query_for_track = f'{candidate.get("artist", "")} — {candidate.get("title", "")}'
             path = None
             temporary_message = None
