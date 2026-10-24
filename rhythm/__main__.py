@@ -12,7 +12,7 @@ from aiogram.enums import ChatAction
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup,
-    InlineKeyboardButton, InlineQuery, InlineQueryResultCachedAudio, InlineQueryResultAudio,
+    InlineKeyboardButton, InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
 )
 from .config import BOT_TOKEN, DOWNLOAD_DIR, prepare_runtime
 from .downloader import cleanup
@@ -177,125 +177,64 @@ async def choose_track(callback: CallbackQuery) -> None:
         except Exception:
             pass
 
-async def _warm_inline_cache(query: str, user_id: int) -> None:
-    """Prepare one real MP3 after answering the inline query.
-
-    Telegram requires a cached audio file_id for InlineQueryResultCachedAudio.
-    Downloads must therefore happen outside the inline answer deadline. The
-    user can repeat the same query after preparation finishes.
-    """
-    path = None
-    temporary_message = None
-    try:
-        tracks = (await asyncio.wait_for(search_options(query), timeout=18.0))[:INLINE_RESULTS]
-        if not tracks:
-            log.info("Inline warm-up found no candidates for %r", query)
-            return
-
-        # Try the best-ranked candidates, but keep the background task bounded.
-        for candidate in tracks[:3]:
-            key = _track_key(candidate)
-            if _cache_get(key):
-                continue
-            query_for_track = f'{candidate.get("artist", "")} — {candidate.get("title", "")}'
-            try:
-                track, path = await asyncio.wait_for(_download_tagged(query_for_track), timeout=35.0)
-                temporary_message = await asyncio.wait_for(
-                    bot_for_inline.send_audio(
-                        chat_id=user_id,
-                        audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
-                        title=track["title"][:64],
-                        performer=track["artist"][:64],
-                        disable_notification=True,
-                    ),
-                    timeout=12.0,
-                )
-                if temporary_message.audio:
-                    file_id = temporary_message.audio.file_id
-                    _inline_file_ids[key] = file_id
-                    _inline_file_ids[_track_key(track)] = file_id
-                    _cache_set(key, file_id)
-                    _cache_set(_track_key(track), file_id)
-                    log.info("Inline audio cached for query=%r track=%r", query, query_for_track)
-                    return
-            except asyncio.TimeoutError:
-                log.warning("Inline warm-up timed out for %r", query_for_track)
-            except Exception:
-                log.exception("Inline warm-up failed for %r", query_for_track)
-            finally:
-                cleanup(path)
-                path = None
-                if temporary_message:
-                    try:
-                        await temporary_message.bot.delete_message(
-                            chat_id=user_id, message_id=temporary_message.message_id
-                        )
-                    except Exception:
-                        log.debug("Could not delete temporary inline upload", exc_info=True)
-                    temporary_message = None
-    except asyncio.TimeoutError:
-        log.warning("Inline warm-up search timed out for query=%r", query)
-    except Exception:
-        log.exception("Inline warm-up failed for query=%r", query)
-
-
-# The bot instance is assigned during startup and reused by background cache jobs.
-bot_for_inline: Bot | None = None
-_inline_warm_tasks: dict[tuple[int, str], asyncio.Task] = {}
-
-
 @dp.inline_query()
 async def inline_search(inline_query: InlineQuery) -> None:
+    """Search inline quickly and return selectable tracks, never pre-download audio."""
     query = (inline_query.query or "").strip()
     if len(query) < 2:
         await inline_query.answer([], cache_time=1, is_personal=True)
         return
 
-    results = []
-    seen_ids = set()
-    normalized_query = query.casefold()
     try:
-        # Search persistent Telegram file_id cache first; this path should be fast.
-        if _INLINE_CACHE_DB is not None:
-            with sqlite3.connect(_INLINE_CACHE_DB, timeout=1) as db:
-                rows = db.execute(
-                    "SELECT track_key, file_id FROM audio_cache ORDER BY updated_at DESC LIMIT 500"
-                ).fetchall()
-            tokens = [
-                token for token in normalized_query.replace("—", " ").replace("–", " ")
-                .replace("-", " ").replace("|", " ").split() if len(token) > 1
-            ]
-            for key, file_id in rows:
-                if tokens and all(token in key for token in tokens) and file_id not in seen_ids:
-                    results.append(InlineQueryResultCachedAudio(
-                        id=f"rh-cache-{abs(hash(key))}"[:64],
-                        audio_file_id=file_id,
-                    ))
-                    seen_ids.add(file_id)
-                    if len(results) >= INLINE_RESULTS:
-                        break
-
-        if not results:
-            # Always answer within Telegram's deadline. The first cold query
-            # warms the cache in the background; repeating the query returns MP3s.
-            await inline_query.answer([], cache_time=1, is_personal=True)
-            if bot_for_inline is None:
-                return
-            task_key = (inline_query.from_user.id, normalized_query)
-            task = _inline_warm_tasks.get(task_key)
-            if task is None or task.done():
-                task = asyncio.create_task(_warm_inline_cache(query, inline_query.from_user.id))
-                _inline_warm_tasks[task_key] = task
-                task.add_done_callback(lambda _task, k=task_key: _inline_warm_tasks.pop(k, None))
-                log.info("Inline cache warm-up scheduled for query=%r", query)
+        tracks = await asyncio.wait_for(search_options(query), timeout=4.0)
+        tracks = tracks[:15]
+        if not tracks:
+            await inline_query.answer([], cache_time=2, is_personal=True)
             return
 
+        sid = next(_ids)
+        _sessions[sid] = {
+            "tracks": tracks,
+            "owner": inline_query.from_user.id,
+        }
+        results = []
+        for idx, track in enumerate(tracks):
+            artist = str(track.get("artist") or "Неизвестный исполнитель")
+            title = str(track.get("title") or "Без названия")
+            album = str(track.get("album") or "").strip()
+            duration = track.get("duration")
+            details = []
+            if album:
+                details.append(album)
+            if isinstance(duration, (int, float)) and duration > 0:
+                details.append(f"{int(duration) // 60}:{int(duration) % 60:02d}")
+            results.append(InlineQueryResultArticle(
+                id=f"rh-{sid}-{idx}"[:64],
+                title=f"{artist} — {title}"[:128],
+                description=" · ".join(details)[:255] or "Нажми, чтобы выбрать трек и скачать MP3",
+                input_message_content=InputTextMessageContent(
+                    message_text=f"Rhythm\n{artist} — {title}\nНажми «Скачать MP3», чтобы загрузить трек."
+                ),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="Скачать MP3",
+                        callback_data=f"rh:pick:{sid}:{idx}",
+                    )
+                ]]),
+            ))
+
         await inline_query.answer(results, cache_time=2, is_personal=True)
-        log.info("Inline answer sent from cache query=%r results=%d", query, len(results))
+        log.info("Inline search query=%r results=%d session=%d", query, len(results), sid)
+    except asyncio.TimeoutError:
+        log.warning("Inline search timed out for query=%r", query)
+        try:
+            await inline_query.answer([], cache_time=1, is_personal=True)
+        except Exception:
+            pass
     except Exception:
         log.exception("Inline search failed for query=%r", query)
         try:
-            await inline_query.answer(results, cache_time=1, is_personal=True)
+            await inline_query.answer([], cache_time=1, is_personal=True)
         except Exception:
             pass
 
