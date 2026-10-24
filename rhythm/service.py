@@ -182,7 +182,7 @@ async def search_options(query: str) -> list[dict]:
     source_query = f"{requested[0]} {requested[1]}" if requested else query
     threshold = 66 if requested else 58
     # Prefer structured YouTube Music song entries over arbitrary uploads.
-    for source in ("youtube_music", "youtube", "soundcloud"):
+    for source in ("youtube_music",):
         try:
             results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
         except Exception:
@@ -308,7 +308,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
     # Search by trusted catalog metadata when available, not by the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
-    for source in ("soundcloud", "youtube_music", "youtube"):
+    for source in ("youtube_music",):
         try:
             results = await asyncio.to_thread(search_source, search_query, source, 8)
             log.info("%s search query=%r returned %d candidates", source, search_query, len(results))
@@ -357,9 +357,9 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
 
     log.error("No track found for query=%r; diagnostics=%s", query, diagnostics)
     if diagnostics and all("ошибка поиска" in item for item in diagnostics):
-        message = "YouTube и SoundCloud не ответили на поиск. Проверь логи Railway: там будет точная причина."
+        message = "YouTube Music не ответил на поиск. Проверь логи Railway: там будет точная причина."
     elif any("скачивание не удалось" in item for item in diagnostics):
-        message = "Результаты поиска есть, но источники не дали скачать аудио. Проверь логи Railway — причина записана там."
+        message = "YouTube Music нашёл результат, но не удалось скачать аудио. Проверь логи Railway — причина записана там."
     else:
-        message = "Не удалось найти достаточно точное совпадение. Попробуй запрос «исполнитель — название»."
+        message = "В YouTube Music не удалось найти достаточно точное совпадение. Попробуй запрос «исполнитель — название»."
     raise LookupError(message)
