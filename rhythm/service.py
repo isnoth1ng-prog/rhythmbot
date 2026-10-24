@@ -167,7 +167,7 @@ async def search_options(query: str) -> list[dict]:
     fallback, seen = [], set()
     source_query = f"{requested[0]} {requested[1]}" if requested else query
     threshold = 66 if requested else 58
-    for source in ("youtube_music", "youtube", "soundcloud"):
+    for source in ("soundcloud", "youtube_music", "youtube"):
         try:
             results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
         except Exception:
@@ -288,7 +288,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
     # Search by trusted catalog metadata when available, not by the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
-    for source in ("youtube_music", "youtube", "soundcloud"):
+    for source in ("soundcloud", "youtube_music", "youtube"):
         try:
             results = await asyncio.to_thread(search_source, search_query, source, 8)
             log.info("%s search query=%r returned %d candidates", source, search_query, len(results))
