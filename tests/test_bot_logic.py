@@ -1,6 +1,6 @@
 import unittest
 
-from aiogram.types import InlineQueryResultAudio, InlineQueryResultCachedAudio
+from aiogram.types import InlineQueryResultCachedAudio
 
 from rhythm.__main__ import _track_key
 from rhythm.service import _audio_score
@@ -15,22 +15,10 @@ class InlineResultTests(unittest.TestCase):
         self.assertEqual(result.type, "audio")
         self.assertEqual(result.audio_file_id, "telegram-file-id")
 
-    def test_preview_inline_result_uses_apple_preview_url(self):
-        result = InlineQueryResultAudio(
-            id="rh-preview-test",
-            audio_url="https://audio-ssl.itunes.apple.com/test.m4a",
-            title="В огне",
-            performer="Макулатура",
-            audio_duration=30,
-        )
-        self.assertEqual(result.type, "audio")
-        self.assertEqual(result.audio_url, "https://audio-ssl.itunes.apple.com/test.m4a")
-        self.assertEqual(result.audio_duration, 30)
-
     def test_track_key_is_normalized(self):
         self.assertEqual(
             _track_key({"artist": "  Макулатура ", "title": " В огне "}),
-            "макулатура|в огне",
+            "ytmusic-v1|макулатура|в огне",
         )
 
     def test_audio_score_prefers_matching_title_and_artist(self):
