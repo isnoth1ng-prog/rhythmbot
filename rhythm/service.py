@@ -15,8 +15,23 @@ log = logging.getLogger("rhythm.service")
 
 
 def _clean(value: str) -> str:
-    value = re.sub(r"\s*[-–—|]?\s*Topic\s*$", "", value or "", flags=re.IGNORECASE)
-    return value.strip(" -–—|")
+    """Normalize source titles without changing the trusted catalog metadata."""
+    value = (value or "").replace("\u200b", "").replace("\ufeff", "")
+    value = re.sub(r"\s*[-–—|]?\s*Topic\s*$", "", value, flags=re.IGNORECASE)
+    # Remove common YouTube packaging labels, not meaningful track versions.
+    value = re.sub(
+        r"\s*[\[(](?:FMV|AMV|MV|M/V|OFFICIAL\s+(?:VIDEO|AUDIO|MUSIC\s+VIDEO)|"
+        r"LYRICS?(?:\s+VIDEO)?|MUSIC\s+VIDEO|VISUALIZER|4K|8K|HD|HQ|"
+        r"FULL\s+VERSION|AUDIO\s+ONLY|LYRIC\s+VIDEO)[\])]\s*",
+        " ", value, flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"\s*[-|•]\s*(?:official\s+(?:video|audio)|lyrics?(?:\s+video)?|"
+        r"music\s+video|visualizer|4k|8k|hd|hq)\s*$",
+        "", value, flags=re.IGNORECASE,
+    )
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" -–—|•\t")
 
 
 def _artist_query(query: str) -> bool:
@@ -28,18 +43,30 @@ def _similarity(left: str, right: str) -> float:
 
 
 def _audio_score(result: dict, track: dict, query: str = "") -> float:
-    title = result.get("title") or ""
-    uploader = result.get("uploader") or ""
+    raw_title = result.get("title") or ""
+    title = _clean(raw_title)
+    uploader = _clean(result.get("uploader") or "")
+    # Search-result titles often contain video labels or decorative prefixes.
+    # Score the normalized title, while mildly penalizing noisy uploads.
+    noise = bool(re.search(
+        r"\b(?:FMV|AMV|OFFICIAL\s+VIDEO|LYRICS?|MUSIC\s+VIDEO|VISUALIZER)\b|[™©®]",
+        raw_title, flags=re.IGNORECASE,
+    ))
     if track.get("artist") and track.get("title"):
         expected = f'{track["artist"]} - {track["title"]}'
-        title_score = _similarity(title, expected)
-        title_only_score = _similarity(title, track["title"])
+        title_score = max(
+            _similarity(title, expected),
+            _similarity(title, track["title"]) * 0.88,
+        )
         artist_score = _similarity(uploader, track["artist"]) if uploader else 0.0
-        score = max(title_score, title_only_score * 0.85 + artist_score * 0.15)
+        # A clean catalog match should win over uploader/video naming quirks.
+        score = max(title_score, _similarity(title, expected) * 0.9 + artist_score * 0.1)
     else:
         score = _similarity(title, query)
         if uploader:
             score = max(score, _similarity(f"{uploader} - {title}", query))
+    if noise:
+        score -= 5
 
     source_duration = result.get("duration")
     target_duration = track.get("duration")
@@ -231,6 +258,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 "metadata_score": 0, "metadata_source": "explicit query fallback",
             }
 
+    # Search by trusted catalog metadata when available, not by the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
     for source in ("youtube", "soundcloud"):
