@@ -199,12 +199,12 @@ async def search_options(query: str) -> list[dict]:
                 combined_score = _similarity(f"{uploader} {raw_title}", query) if uploader else title_score
                 score = max(title_score, combined_score * 0.92)
                 query_words = {
-                    token.casefold() for token in re.findall(r"[^\\W_]+", query, flags=re.UNICODE)
+                    token.casefold() for token in re.findall(r"[^\W_]+", query, flags=re.UNICODE)
                     if len(token) > 1
                 }
                 result_words = {
                     token.casefold() for token in re.findall(
-                        r"[^\\W_]+", f"{uploader} {raw_title}", flags=re.UNICODE
+                        r"[^\W_]+", f"{uploader} {raw_title}", flags=re.UNICODE
                     ) if len(token) > 1
                 }
                 coverage = len(query_words & result_words) / max(1, len(query_words))
