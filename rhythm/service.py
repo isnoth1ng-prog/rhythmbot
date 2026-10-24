@@ -138,7 +138,7 @@ def _fallback_metadata(query: str, candidate: dict) -> dict:
 def _metadata_priority(track: dict) -> tuple[int, float]:
     source = str(track.get("metadata_source") or "").casefold()
     # Trusted catalog metadata always precedes source-derived titles.
-    trusted = 1 if source in {"apple/itunes", "apple", "itunes"} else 0
+    trusted = 2 if source in {"apple/itunes", "apple", "itunes"} else 1 if source == "deezer" else 0
     return trusted, float(track.get("metadata_score") or 0)
 
 
