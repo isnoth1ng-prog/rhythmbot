@@ -12,7 +12,7 @@ from aiogram.enums import ChatAction
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup,
-    InlineKeyboardButton, InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
+    InlineKeyboardButton, InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedAudio, InputTextMessageContent,
 )
 from .config import BOT_TOKEN, DOWNLOAD_DIR, prepare_runtime
 from .downloader import cleanup
@@ -179,7 +179,7 @@ async def choose_track(callback: CallbackQuery) -> None:
 
 @dp.inline_query()
 async def inline_search(inline_query: InlineQuery) -> None:
-    """Search inline quickly and return selectable tracks, never pre-download audio."""
+    """Return cached Telegram audio immediately; uncached tracks use the bot chat for first download."""
     query = (inline_query.query or "").strip()
     if len(query) < 2:
         await inline_query.answer([], cache_time=1, is_personal=True)
@@ -187,20 +187,23 @@ async def inline_search(inline_query: InlineQuery) -> None:
 
     try:
         tracks = await asyncio.wait_for(search_options(query), timeout=4.0)
-        tracks = tracks[:15]
+        tracks = tracks[:INLINE_RESULTS]
         if not tracks:
-            await inline_query.answer([], cache_time=2, is_personal=True)
+            await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
-        sid = next(_ids)
-        _sessions[sid] = {
-            "tracks": tracks,
-            "owner": inline_query.from_user.id,
-        }
         results = []
         for idx, track in enumerate(tracks):
             artist = str(track.get("artist") or "Неизвестный исполнитель")
             title = str(track.get("title") or "Без названия")
+            file_id = _cache_get(_track_key(track))
+            if file_id:
+                results.append(InlineQueryResultCachedAudio(
+                    id=f"rh-a-{idx}",
+                    audio_file_id=file_id,
+                ))
+                continue
+
             album = str(track.get("album") or "").strip()
             duration = track.get("duration")
             details = []
@@ -209,22 +212,20 @@ async def inline_search(inline_query: InlineQuery) -> None:
             if isinstance(duration, (int, float)) and duration > 0:
                 details.append(f"{int(duration) // 60}:{int(duration) % 60:02d}")
             results.append(InlineQueryResultArticle(
-                id=f"rh-{sid}-{idx}"[:64],
+                id=f"rh-new-{idx}",
                 title=f"{artist} — {title}"[:128],
-                description=" · ".join(details)[:255] or "Нажми, чтобы выбрать трек и скачать MP3",
+                description=" · ".join(details)[:255] or "Первый раз? Получи MP3 в чате с Rhythm",
                 input_message_content=InputTextMessageContent(
-                    message_text=f"Rhythm\n{artist} — {title}\nНажми «Скачать MP3», чтобы загрузить трек."
-                ),
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="Скачать MP3",
-                        callback_data=f"rh:pick:{sid}:{idx}",
+                    message_text=(
+                        f"Rhythm — этот трек ещё не сохранён для мгновенной отправки.\n"
+                        f"Открой чат с Rhythm и отправь запрос:\n{artist} — {title}"
                     )
-                ]]),
+                ),
             ))
 
-        await inline_query.answer(results, cache_time=2, is_personal=True)
-        log.info("Inline search query=%r results=%d session=%d", query, len(results), sid)
+        await inline_query.answer(results, cache_time=1, is_personal=True)
+        log.info("Inline search query=%r results=%d cached=%d", query, len(results),
+                 sum(1 for item in results if isinstance(item, InlineQueryResultCachedAudio)))
     except asyncio.TimeoutError:
         log.warning("Inline search timed out for query=%r", query)
         try:
