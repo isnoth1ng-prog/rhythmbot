@@ -157,7 +157,7 @@ async def search_options(query: str) -> list[dict]:
     fallback, seen = [], set()
     source_query = f"{requested[0]} {requested[1]}" if requested else query
     threshold = 66 if requested else 58
-    for source in ("youtube", "soundcloud"):
+    for source in ("youtube_music", "youtube", "soundcloud"):
         try:
             results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
         except Exception:
