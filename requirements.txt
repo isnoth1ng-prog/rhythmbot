@@ -5,3 +5,4 @@ mutagen>=1.47,<2.0
 Pillow>=11.0,<13.0
 rapidfuzz>=3.10,<4.0
 python-dotenv>=1.0,<2.0
+ytmusicapi>=1.12,<2.0
