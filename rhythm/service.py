@@ -268,12 +268,17 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
                 log.info("No confident catalog match for %r; preserving the user's artist/title", query)
         elif catalog_tracks:
             best = catalog_tracks[0]
-            if best.get("metadata_score", 0) >= 55:
+            # A fuzzy score alone is not enough to replace the user's query:
+            # iTunes can return a different song for short/ambiguous phrases.
+            # Only trust catalog metadata when the result is a very strong match.
+            score = float(best.get("metadata_score", 0) or 0)
+            if score >= 82:
                 track = dict(best)
                 track["album"] = track.get("album") or ""
+                log.info("Accepted strong Apple/iTunes match for %r score=%s", query, round(score))
             else:
-                log.info("Apple/iTunes match too weak for query=%r score=%s; trying audio sources directly",
-                         query, best.get("metadata_score"))
+                log.info("Apple/iTunes match too weak for query=%r score=%s; preserving original query",
+                         query, round(score))
         else:
             log.info("Apple/iTunes returned no results for query=%r; trying audio sources directly", query)
     except Exception:
