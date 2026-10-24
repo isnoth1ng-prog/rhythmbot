@@ -177,34 +177,82 @@ async def get_dislikes(video_id: str) -> Optional[int]:
 # Search
 
 def _run_search(query: str) -> List[Dict[str, Any]]:
-    refined_query = f"{query} official music video"
+    """Search YouTube and reject candidates that do not match the requested song."""
+    import re
+    from rapidfuzz import fuzz
+
+    clean_query = re.sub(r"\\s+", " ", (query or "")).strip()
+    if not clean_query:
+        return []
+
+    parts = re.split(r"\\s+[—–-]\\s+", clean_query, maxsplit=1)
+    requested_artist = parts[0].strip() if len(parts) == 2 else ""
+    requested_title = parts[1].strip() if len(parts) == 2 else clean_query
+    search_queries = [clean_query]
+    if requested_title.lower() != clean_query.lower():
+        search_queries.append(requested_title)
+
+    candidates: Dict[str, Dict[str, Any]] = {}
     with YoutubeDL(_search_ydl_opts()) as ydl:  # type: ignore
-        try:
-            result = ydl.extract_info(f"ytsearch10:{refined_query}", download=False)
-            entries = (result or {}).get("entries", [])
+        for search_query in search_queries:
+            try:
+                result = ydl.extract_info(f"ytsearch10:{search_query}", download=False)
+                for entry in (result or {}).get("entries", []) or []:
+                    if entry and entry.get("id"):
+                        candidates[str(entry["id"])] = entry
+            except DownloadError as exc:
+                logger.warning("yt-dlp search failed for query %r: %s", search_query, exc)
 
-            if not entries:
-                return []
+    ranked = []
+    has_overlong_tracks = False
+    for entry in candidates.values():
+        duration = entry.get("duration")
+        if duration and duration > MAX_SONG_DURATION_SEC:
+            has_overlong_tracks = True
+            continue
+        title = (entry.get("title") or "").strip()
+        uploader = (entry.get("uploader") or entry.get("channel") or "").strip()
+        if not title:
+            continue
 
-            valid_entries = []
-            has_overlong_tracks = False
+        title_score = max(
+            fuzz.ratio(requested_title.casefold(), title.casefold()),
+            fuzz.token_set_ratio(requested_title.casefold(), title.casefold()),
+        )
+        combined = f"{uploader} {title}".casefold()
+        full_score = max(
+            fuzz.ratio(clean_query.casefold(), combined),
+            fuzz.token_set_ratio(clean_query.casefold(), combined),
+        )
+        if requested_artist:
+            artist_score = max(
+                fuzz.ratio(requested_artist.casefold(), uploader.casefold()),
+                fuzz.partial_ratio(requested_artist.casefold(), uploader.casefold()),
+            )
+            if requested_artist.casefold() in title.casefold():
+                artist_score = max(artist_score, 90)
+            if title_score < 58:
+                continue
+            if artist_score < 45 and title_score < 92:
+                continue
+            score = title_score * 0.72 + artist_score * 0.23 + full_score * 0.05
+        else:
+            score = title_score * 0.8 + full_score * 0.2
+            if title_score < 62:
+                continue
+        ranked.append((score, entry))
 
-            for entry in entries:
-                duration = entry.get("duration")
-                if duration and duration > MAX_SONG_DURATION_SEC:
-                    has_overlong_tracks = True
-                    continue
-
-                valid_entries.append(entry)
-
-            if not valid_entries and has_overlong_tracks:
-                raise Exception("SEARCH_ALL_TOO_LONG")
-
-            return valid_entries
-
-        except DownloadError:
-            logger.error(f"yt-dlp search failed for query: {query}")
-            return []
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not ranked:
+        if has_overlong_tracks:
+            raise Exception("SEARCH_ALL_TOO_LONG")
+        return []
+    best_score, best_entry = ranked[0]
+    if best_score < 63:
+        logger.info("No reliable YouTube match for %r (best score %.1f)", clean_query, best_score)
+        return []
+    logger.info("YouTube match for %r: %s - %s (score %.1f)", clean_query, best_entry.get("uploader"), best_entry.get("title"), best_score)
+    return [entry for score, entry in ranked if score >= max(63, best_score - 12)][:10]
 
 
 async def search_multiple(query: str) -> List[Dict[str, Any]]:
