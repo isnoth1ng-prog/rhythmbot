@@ -4,7 +4,7 @@ Telegram music bot focused on accurate song matching and clean audio metadata.
 
 ## Search and metadata
 
-- Apple/iTunes provides canonical artist, track title, album, duration, and cover art when a confident catalog match exists.
+- Apple/iTunes and Deezer provide independent structured artist, track title, album, duration, ISRC (when available), and cover-art metadata. Apple/iTunes is preferred when both catalogs identify the same recording.
 - YouTube Music is searched separately for structured song results and is used as the audio source.
 - Catalog and YouTube Music results are merged and de-duplicated instead of stopping when either source returns results.
 - Search ranking compares artist and title independently; explicit artist/title queries preserve the user's spelling when catalog metadata is not confident.
