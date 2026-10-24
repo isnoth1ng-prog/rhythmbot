@@ -183,14 +183,30 @@ async def search_options(query: str) -> list[dict]:
                     continue
                 display_artist, display_title = requested[0], requested[1]
             else:
+                # For a free-text query, score the actual title separately from the uploader.
+                # WRatio alone can overrate partial matches, so require strong title coverage too.
                 title_score = _similarity(raw_title, query)
-                combined_score = _similarity(f"{uploader} - {raw_title}", query) if uploader else title_score
-                score = max(title_score, combined_score)
-                if score < threshold:
+                combined_score = _similarity(f"{uploader} {raw_title}", query) if uploader else title_score
+                score = max(title_score, combined_score * 0.92)
+                query_words = {
+                    token.casefold() for token in re.findall(r"[^\\W_]+", query, flags=re.UNICODE)
+                    if len(token) > 1
+                }
+                result_words = {
+                    token.casefold() for token in re.findall(
+                        r"[^\\W_]+", f"{uploader} {raw_title}", flags=re.UNICODE
+                    ) if len(token) > 1
+                }
+                coverage = len(query_words & result_words) / max(1, len(query_words))
+                # Do not expose loosely related videos just because one word matches.
+                if score < max(70, threshold + 10) or coverage < 0.75:
                     continue
                 display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
 
-            key = (display_title.casefold(), display_artist.casefold())
+            key = (
+                re.sub(r"[^\\w]+", "", display_title.casefold(), flags=re.UNICODE),
+                re.sub(r"[^\\w]+", "", display_artist.casefold(), flags=re.UNICODE),
+            )
             if key in seen:
                 continue
             seen.add(key)
