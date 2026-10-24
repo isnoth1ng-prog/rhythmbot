@@ -1,6 +1,7 @@
 # core/services/youtube.py
 
 import asyncio
+import base64
 import os
 import uuid
 import glob
@@ -81,16 +82,47 @@ async def cleanup_temp_files(temp_file_base: str) -> None:
 
 # yt-dlp options
 
+def _youtube_cookie_file() -> Optional[str]:
+    """Prepare optional YouTube cookies from a Railway secret (base64 encoded Netscape cookie file)."""
+    cookie_path = os.getenv("YOUTUBE_COOKIE_FILE", "data/cookies.txt")
+    cookie_b64 = os.getenv("YOUTUBE_COOKIES_BASE64", "").strip()
+
+    if cookie_b64:
+        try:
+            cookie_bytes = base64.b64decode(cookie_b64, validate=True)
+            cookie_text = cookie_bytes.decode("utf-8")
+            if "Netscape" not in cookie_text[:300] and not cookie_text.startswith("#"):
+                logger.warning("YOUTUBE_COOKIES_BASE64 does not look like a Netscape cookies file.")
+                return None
+            os.makedirs(os.path.dirname(cookie_path) or ".", exist_ok=True)
+            with open(cookie_path, "w", encoding="utf-8") as cookie_file:
+                cookie_file.write(cookie_text)
+            try:
+                os.chmod(cookie_path, 0o600)
+            except OSError:
+                pass
+            return cookie_path
+        except Exception as exc:
+            logger.error("Could not prepare YouTube cookies from environment: %s", exc)
+            return None
+
+    # Also support a manually mounted cookies file, but do not pass a missing path to yt-dlp.
+    return cookie_path if os.path.isfile(cookie_path) else None
+
+
 def _base_ydl_opts() -> Dict[str, Any]:
-    return {
+    opts = {
         'logger': YTDLPLogger(),
         'verbose': True,
         'quiet': False,
         'noplaylist': True,
-        'cookiefile': 'data/cookies.txt',
         'encoding': 'utf-8',
         'postprocessors': [],
     }
+    cookie_file = _youtube_cookie_file()
+    if cookie_file:
+        opts['cookiefile'] = cookie_file
+    return opts
 
 
 def _enable_node_js_runtime(opts: Dict[str, Any]) -> Dict[str, Any]:
