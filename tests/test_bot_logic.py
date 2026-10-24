@@ -65,3 +65,51 @@ class InlineResultTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchMergeTests(unittest.TestCase):
+    def test_search_options_merges_catalog_and_youtube_music(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from rhythm.service import search_options
+
+        catalog = [{
+            "artist": "Макулатура", "title": "В огне", "album": "Реприза",
+            "duration": 210, "artwork_url": "https://example.test/cover.jpg",
+            "track_url": "https://music.apple.com/track/1", "metadata_score": 98,
+            "metadata_source": "Apple/iTunes",
+        }]
+        source = [
+            {"source": "youtube_music", "url": "https://music.youtube.com/watch?v=abc",
+             "title": "В огне", "duration": 211, "uploader": "Макулатура"},
+            {"source": "youtube_music", "url": "https://music.youtube.com/watch?v=def",
+             "title": "Другой трек", "duration": 190, "uploader": "Другой исполнитель"},
+        ]
+        with patch("rhythm.service.search_tracks", new=AsyncMock(return_value=catalog)), \
+             patch("rhythm.service.search_source", return_value=source) as source_search:
+            results = asyncio.run(search_options("Макулатура — В огне"))
+
+        source_search.assert_called_once()
+        self.assertTrue(any(item.get("audio_source") == "youtube_music" for item in results))
+        exact = next(item for item in results if item["artist"] == "Макулатура" and item["title"] == "В огне")
+        self.assertEqual(exact["metadata_source"], "Apple/iTunes")
+        self.assertEqual(exact["track_url"], "https://music.youtube.com/watch?v=abc")
+        self.assertEqual(len([item for item in results if item["title"] == "В огне"]), 1)
+
+    def test_search_options_does_not_require_empty_catalog_to_use_youtube_music(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from rhythm.service import search_options
+
+        source = [{
+            "source": "youtube_music", "url": "https://music.youtube.com/watch?v=abc",
+            "title": "В огне", "duration": 211, "uploader": "Макулатура",
+        }]
+        with patch("rhythm.service.search_tracks", new=AsyncMock(return_value=[])), \
+             patch("rhythm.service.search_source", return_value=source):
+            results = asyncio.run(search_options("Макулатура — В огне"))
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["artist"], "Макулатура")
+        self.assertEqual(results[0]["title"], "В огне")
+        self.assertEqual(results[0]["metadata_source"], "YouTube Music")
