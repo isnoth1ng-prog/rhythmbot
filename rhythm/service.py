@@ -55,13 +55,23 @@ def _audio_score(result: dict, track: dict, query: str = "") -> float:
     ))
     if track.get("artist") and track.get("title"):
         expected = f'{track["artist"]} - {track["title"]}'
-        title_score = max(
-            _similarity(title, expected),
-            _similarity(title, track["title"]) * 0.88,
-        )
+        expected_score = _similarity(title, expected)
+        title_only_score = _similarity(title, track["title"])
         artist_score = _similarity(uploader, track["artist"]) if uploader else 0.0
-        # A clean catalog match should win over uploader/video naming quirks.
-        score = max(title_score, _similarity(title, expected) * 0.9 + artist_score * 0.1)
+
+        # Hard title gate: artist/uploader similarity must never rescue a
+        # different song. Prefer a source title containing artist + track title.
+        if max(expected_score, title_only_score) < 72:
+            return 0.0
+        # If the title is not an almost exact match, require evidence that the
+        # upload belongs to the requested artist.
+        artist_in_title = expected_score >= 82
+        if artist_score < 45 and not artist_in_title and title_only_score < 90:
+            return 0.0
+
+        score = max(expected_score, title_only_score * 0.88)
+        if artist_score:
+            score = max(score, expected_score * 0.9 + artist_score * 0.1)
     else:
         score = _similarity(title, query)
         if uploader:
@@ -297,7 +307,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
             continue
         log.info("%s top candidates: %s",
                  source, [(round(score), item.get("title", "")[:90]) for score, item in ranked[:5]])
-        eligible = [(score, item) for score, item in ranked if score >= 62]
+        eligible = [(score, item) for score, item in ranked if score >= 72]
         if not eligible:
             diagnostics.append(f"{source}: совпадения слишком слабые")
             continue
