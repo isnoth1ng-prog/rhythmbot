@@ -45,6 +45,16 @@ def _similarity(left: str, right: str) -> float:
 
 def _audio_score(result: dict, track: dict, query: str = "") -> float:
     raw_title = result.get("title") or ""
+    # Reject explicit alternate edits before fuzzy matching: they can score
+    # highly against the same song name while playing at a different speed.
+    if re.search(
+        r"\\b(?:speed[ -]?up|sped[ -]?up|slowed(?:\\s*\\+?\\s*reverb)?|"
+        r"nightcore|daycore|ultra\\s*slowed|super\\s*slowed|"
+        r"remix|rework|mashup|8d\\s*audio|bass\\s*boost(?:ed)?|"
+        r"extended\\s+(?:mix|version)|edit\\s*\\(?speed)",
+        raw_title, flags=re.IGNORECASE,
+    ):
+        return 0.0
     title = _clean(raw_title)
     uploader = _clean(result.get("uploader") or "")
     # Search-result titles often contain video labels or decorative prefixes.
@@ -86,10 +96,13 @@ def _audio_score(result: dict, track: dict, query: str = "") -> float:
             return 0.0
         if isinstance(target_duration, (int, float)) and target_duration > 0:
             difference = abs(source_duration - target_duration)
-            if difference > 45:
-                score -= min(24, difference / 4)
-            elif difference > 20:
-                score -= 8
+            # A large duration mismatch is a strong sign of a sped-up,
+            # shortened, live, or otherwise different edit. Reject it instead
+            # of letting title similarity win.
+            if difference > max(18, target_duration * 0.08):
+                return 0.0
+            elif difference > 10:
+                score -= 5
     return score
 
 
@@ -167,7 +180,8 @@ async def search_options(query: str) -> list[dict]:
     fallback, seen = [], set()
     source_query = f"{requested[0]} {requested[1]}" if requested else query
     threshold = 66 if requested else 58
-    for source in ("soundcloud", "youtube_music", "youtube"):
+    # Prefer structured YouTube Music song entries over arbitrary uploads.
+    for source in ("youtube_music", "youtube", "soundcloud"):
         try:
             results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
         except Exception:
