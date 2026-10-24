@@ -3,6 +3,7 @@ import time
 import os
 import uuid
 from aiogram import types, F
+from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.exceptions import TelegramBadRequest
 from core import strings
@@ -53,6 +54,11 @@ async def remove_not_right_button(sent_message, key, full_name):
         )
     except Exception as e:
         logger.debug(f"Failed to update reply markup for {key}: {e}")
+
+
+@dp.message(CommandStart())
+async def start_handler(message: types.Message):
+    await message.answer("Rhythm — поиск музыки в Telegram.\nОтправь название песни или исполнителя.")
 
 
 @dp.message()
