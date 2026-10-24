@@ -155,6 +155,14 @@ async def search_options(query: str) -> list[dict]:
 
     requested = _split_track_query(query)
     artist_query = requested is None and _artist_query(query)
+    # Start Apple/iTunes and YouTube Music requests together so inline search
+    # does not wait for one remote catalog before even starting the next.
+    source_query = f"{requested[0]} {requested[1]}" if requested else query
+    source_limit = 25 if artist_query else 20
+    source_task = asyncio.create_task(
+        asyncio.to_thread(search_source, source_query, "youtube_music", source_limit)
+    )
+
     catalog_tracks: list[dict] = []
     try:
         catalog_tracks = await search_tracks(query, limit=40 if artist_query else 25)
@@ -191,14 +199,10 @@ async def search_options(query: str) -> list[dict]:
         reverse=True,
     )
 
-    source_query = f"{requested[0]} {requested[1]}" if requested else query
     source_ranked: list[dict] = []
     try:
-        # YTMusic's songs filter avoids arbitrary user videos and exposes
-        # structured artist/title fields, which are better than channel names.
-        source_results = await asyncio.to_thread(
-            search_source, source_query, "youtube_music", 25 if artist_query else 20
-        )
+        # This request was started above, in parallel with Apple/iTunes.
+        source_results = await source_task
     except Exception:
         log.exception("YouTube Music search failed for %r", source_query)
         source_results = []
