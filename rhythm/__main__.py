@@ -80,7 +80,9 @@ def _cache_set(key: str, file_id: str) -> None:
 async def _store_inline_audio(bot: Bot, track: dict, file_id: str) -> str:
     """Store audio in the private cache channel so its Telegram file_id persists."""
     if not INLINE_CACHE_CHANNEL_ID:
+        log.error("Inline cache save skipped: INLINE_CACHE_CHANNEL_ID is not configured")
         return file_id
+    log.info("Inline cache save started: key=%s", _track_key(track))
     cached = await bot.send_audio(
         chat_id=INLINE_CACHE_CHANNEL_ID,
         audio=file_id,
@@ -89,6 +91,7 @@ async def _store_inline_audio(bot: Bot, track: dict, file_id: str) -> str:
     )
     if not cached.audio:
         raise RuntimeError("Telegram did not return audio after storing it in cache channel")
+    log.info("Inline cache channel save succeeded: key=%s", _track_key(track))
     return cached.audio.file_id
 
 
@@ -163,6 +166,7 @@ async def choose_track(callback: CallbackQuery) -> None:
             return
         selected = session["tracks"][idx]
         query = f'{selected.get("artist", "")} — {selected.get("title", "")}'
+        log.info("Track selection started: query=%r track_key=%s channel_configured=%s", query, _track_key(selected), bool(INLINE_CACHE_CHANNEL_ID))
         await callback.answer("Готовлю MP3…")
         await callback.message.edit_text("⬇️ Готовлю…")
         await callback.bot.send_chat_action(callback.message.chat.id, ChatAction.TYPING)
@@ -182,6 +186,7 @@ async def choose_track(callback: CallbackQuery) -> None:
                 _inline_file_ids[_track_key(track)] = cached_file_id
                 _cache_set(_track_key(track), cached_file_id)
                 _cache_set(_track_key(selected), cached_file_id)
+                log.info("Inline cache DB saved: track_key=%s selected_key=%s", _track_key(track), _track_key(selected))
         finally:
             cleanup(path)
         _sessions.pop(sid, None)
@@ -265,6 +270,7 @@ async def main() -> None:
         raise RuntimeError("BOT_TOKEN is missing. Add it to Railway Variables.")
     prepare_runtime()
     _cache_init()
+    log.info("Inline cache diagnostics: channel_configured=%s cache_db=%s", bool(INLINE_CACHE_CHANNEL_ID), _INLINE_CACHE_DB)
     global bot_for_inline
     bot = Bot(BOT_TOKEN)
     bot_for_inline = bot
