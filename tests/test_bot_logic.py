@@ -47,6 +47,24 @@ class InlineResultTests(unittest.TestCase):
         }
         self.assertGreater(_audio_score(matching, track), _audio_score(unrelated, track))
 
+    def test_audio_score_rejects_sped_up_version(self):
+        track = {"artist": "Макулатура", "title": "В огне", "duration": 210}
+        sped_up = {
+            "title": "Макулатура - В огне (speed up)",
+            "uploader": "Макулатура",
+            "duration": 170,
+        }
+        self.assertEqual(_audio_score(sped_up, track), 0.0)
+
+    def test_audio_score_rejects_duration_mismatch(self):
+        track = {"artist": "Макулатура", "title": "В огне", "duration": 210}
+        short_edit = {
+            "title": "Макулатура - В огне",
+            "uploader": "Макулатура",
+            "duration": 165,
+        }
+        self.assertEqual(_audio_score(short_edit, track), 0.0)
+
     def test_audio_score_rejects_duration_outside_limits(self):
         track = {"artist": "Макулатура", "title": "В огне", "duration": 210}
         too_short = {
