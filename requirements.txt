@@ -12,4 +12,4 @@ cachetools
 # Dependencies retained for existing Rhythm tests and metadata modules
 mutagen>=1.47,<2.0
 Pillow>=11.0,<13.0
-yt-musicapi>=1.12,<2.0
+ytmusicapi>=1.12,<2.0
