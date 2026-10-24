@@ -31,6 +31,7 @@ def _clean(value: str) -> str:
         "", value, flags=re.IGNORECASE,
     )
     value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"^[\s™©®|•\-–—]+", "", value)
     return value.strip(" -–—|•\t")
 
 
