@@ -1,45 +1,33 @@
 import random
 
-"COMMAND_PREFIX = ""
+COMMAND_PREFIX = ""
 
 STATUS_SEARCHING = "Ищу трек…"
-"ERROR_PREFIX = "Ошибка: "
-ERROR_LONG_AUDIO = "Track is longer than 15 minutes."
-ERROR_SEARCH_ALL_TOO_LONG = "All found tracks are longer than 15 minutes."
-ERROR_TOO_LARGE = "File is larger than {} MB.".format(50)
-ERROR_NO_RESULTS = "No results found."
+ERROR_PREFIX = "Ошибка: "
+ERROR_LONG_AUDIO = "Трек длиннее 15 минут."
+ERROR_SEARCH_ALL_TOO_LONG = "Все найденные треки длиннее 15 минут."
+ERROR_TOO_LARGE = "Файл больше {} МБ.".format(50)
+ERROR_NO_RESULTS = "Ничего не найдено."
 
 TOO_FAST_CALLBACK = ""
 
 BUTTON_REQUESTER = "{}"
 BUTTON_NOT_RIGHT = "Другой вариант"
 BUTTON_CANCEL = "Отмена"
-UNTITLED_SONG = "Untitled Song"
-UNKNOWN_VALUE = "unknown"
-NOT_FOR_YOU = "❌ This button is not for you 💅"
-SONG_UPDATED = "Song updated."
-INFO_EXPIRED = "Information expired."
-FAILED_TO_UPDATE = "Failed to update message: {}"
+UNTITLED_SONG = "Без названия"
+UNKNOWN_VALUE = "неизвестно"
+NOT_FOR_YOU = "Эта кнопка не для тебя."
+SONG_UPDATED = "Трек обновлён."
+INFO_EXPIRED = "Информация устарела."
+FAILED_TO_UPDATE = "Не удалось обновить сообщение: {}"
 
 
 def get_song_info_message(data, views, likes, dislikes):
-    """Generates the formatted song information message."""
-
-    tagline = random.choice([
-        "The oldest song found is a 3400-year-old hymn from Ugarit.",
-        "A 40,000-year-old bird bone flute is considered the first instrument."
-    ])
-
     year = data.get("upload_date", "")
     year = year[:4] if year else UNKNOWN_VALUE
-
     return (
-        f"👤 Artist: {data.get('artist', UNKNOWN_VALUE)}\n"
-        f"📅 Year: {year}\n"
-        f"──────────────────\n"
-        f"📈 Views: {views}\n"
-        f" \n"
-        f"👍 {likes}  👎 {dislikes}\n"
-        f"──────────────────\n"
-        f"{tagline}"
+        f"Исполнитель: {data.get('artist', UNKNOWN_VALUE)}\n"
+        f"Год: {year}\n"
+        f"Прослушивания: {views}\n"
+        f"Нравится: {likes} | Не нравится: {dislikes}"
     )
