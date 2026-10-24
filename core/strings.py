@@ -1,9 +1,9 @@
 import random
 
-COMMAND_PREFIX = "music "
+"COMMAND_PREFIX = ""
 
-STATUS_SEARCHING = "🔍"
-ERROR_PREFIX = "❌ Error: "
+STATUS_SEARCHING = "Ищу трек…"
+"ERROR_PREFIX = "Ошибка: "
 ERROR_LONG_AUDIO = "Track is longer than 15 minutes."
 ERROR_SEARCH_ALL_TOO_LONG = "All found tracks are longer than 15 minutes."
 ERROR_TOO_LARGE = "File is larger than {} MB.".format(50)
@@ -11,9 +11,9 @@ ERROR_NO_RESULTS = "No results found."
 
 TOO_FAST_CALLBACK = ""
 
-BUTTON_REQUESTER = "🎵{}"
-BUTTON_NOT_RIGHT = "🔎 Not the right song?"
-BUTTON_CANCEL = "❌ Cancel"
+BUTTON_REQUESTER = "{}"
+BUTTON_NOT_RIGHT = "Другой вариант"
+BUTTON_CANCEL = "Отмена"
 UNTITLED_SONG = "Untitled Song"
 UNKNOWN_VALUE = "unknown"
 NOT_FOR_YOU = "❌ This button is not for you 💅"
