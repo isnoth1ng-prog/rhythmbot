@@ -45,15 +45,16 @@ def _similarity(left: str, right: str) -> float:
 
 def _audio_score(result: dict, track: dict, query: str = "") -> float:
     raw_title = result.get("title") or ""
-    # Reject explicit alternate edits before fuzzy matching: they can score
-    # highly against the same song name while playing at a different speed.
-    if re.search(
-        r"\\b(?:speed[ -]?up|sped[ -]?up|slowed(?:\\s*\\+?\\s*reverb)?|"
-        r"nightcore|daycore|ultra\\s*slowed|super\\s*slowed|"
-        r"remix|rework|mashup|8d\\s*audio|bass\\s*boost(?:ed)?|"
-        r"extended\\s+(?:mix|version)|edit\\s*\\(?speed)",
-        raw_title, flags=re.IGNORECASE,
-    ):
+    # Reject explicit alternate edits before fuzzy matching. They can match the
+    # same song name while playing at a different speed or using a remix.
+    title_folded = raw_title.casefold()
+    alternate_markers = (
+        "speed up", "speed-up", "speedup", "sped up", "sped-up",
+        "slowed", "nightcore", "daycore", "ultra slowed", "super slowed",
+        "remix", "rework", "mashup", "8d audio", "bass boost",
+        "bass boosted", "extended mix", "extended version", "speed edit",
+    )
+    if any(marker in title_folded for marker in alternate_markers):
         return 0.0
     title = _clean(raw_title)
     uploader = _clean(result.get("uploader") or "")
