@@ -85,7 +85,10 @@ async def message_handler(message: types.Message):
         return
 
     text = message.text or ""
-    if not text.lower().startswith(strings.COMMAND_PREFIX): return
+    if not text.strip() or text.startswith("/"):
+        return
+    if strings.COMMAND_PREFIX and not text.lower().startswith(strings.COMMAND_PREFIX):
+        return
 
     now = time.time()
     if now - user_last_request_time.get(user_id, 0) < ANTI_SPAM_INTERVAL: return
