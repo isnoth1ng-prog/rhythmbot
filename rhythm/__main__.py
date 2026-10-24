@@ -171,18 +171,11 @@ async def choose_track(callback: CallbackQuery) -> None:
         except Exception:
             pass
     except Exception:
-                log.exception("Apple/iTunes preview fallback failed")
-        try:
-            await callback.message.edit_text(str(exc))
-        except Exception:
-            pass
-    except Exception:
         log.exception("Selected track failed")
         try:
             await callback.message.edit_text("Не получилось скачать этот вариант. Попробуй выбрать другой.")
         except Exception:
             pass
-
 
 @dp.inline_query()
 async def inline_search(inline_query: InlineQuery) -> None:
