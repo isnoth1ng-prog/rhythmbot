@@ -378,7 +378,7 @@ async def resolve_track(query: str) -> tuple[dict, dict]:
     # Search by trusted catalog metadata when available, not by the raw user query.
     search_query = f'{track["artist"]} {track["title"]}' if track else query
     diagnostics: list[str] = []
-    for source in ("youtube_music",):
+    for source in ("youtube_music", "soundcloud", "youtube"):
         try:
             results = await asyncio.to_thread(search_source, search_query, source, 8)
             log.info("%s search query=%r returned %d candidates", source, search_query, len(results))
