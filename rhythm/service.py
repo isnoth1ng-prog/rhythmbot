@@ -143,111 +143,177 @@ def _metadata_priority(track: dict) -> tuple[int, float]:
 
 
 async def search_options(query: str) -> list[dict]:
+    """Return a broad, ranked list while preferring verified catalog metadata.
+
+    Apple/iTunes supplies display metadata; YouTube Music supplies additional
+    song candidates. Results are merged instead of abandoning source search as
+    soon as the catalog returns a few items.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
     requested = _split_track_query(query)
     artist_query = requested is None and _artist_query(query)
+    catalog_tracks: list[dict] = []
     try:
-        tracks = await search_tracks(query, limit=25 if artist_query else 20 if requested else 10)
+        catalog_tracks = await search_tracks(query, limit=40 if artist_query else 25)
     except Exception:
         log.exception("Apple/iTunes search failed for %r", query)
-        tracks = []
 
-    catalog_ranked = []
-    if requested:
-        requested_artist, requested_title = requested
-        for candidate in tracks:
-            artist_score = _similarity(requested_artist, candidate.get("artist", ""))
-            title_score = _similarity(requested_title, candidate.get("title", ""))
-            if artist_score >= 68 and title_score >= 72:
-                item = dict(candidate)
-                item["match_score"] = title_score * 0.6 + artist_score * 0.4
-                catalog_ranked.append(item)
-    elif tracks:
-        if artist_query:
-            tracks = [t for t in tracks if _similarity(query, t.get("artist", "")) >= 60]
-            tracks.sort(key=lambda t: _similarity(query, t.get("artist", "")) * 0.7 +
-                        t.get("metadata_score", 0) * 0.3, reverse=True)
-        else:
-            tracks = [t for t in tracks if t.get("metadata_score", 0) >= 60]
-        catalog_ranked = [dict(t) for t in tracks]
-
-    if catalog_ranked:
-        catalog_ranked.sort(key=lambda t: (
-            float(t.get("match_score", t.get("metadata_score", 0))),
-            float(t.get("metadata_score", 0))
-        ), reverse=True)
-        # Keep trusted Apple/iTunes results first; source search is only a fallback.
-        return catalog_ranked[:15]
-
-    fallback, seen = [], set()
-    source_query = f"{requested[0]} {requested[1]}" if requested else query
-    threshold = 66 if requested else 58
-    # Prefer structured YouTube Music song entries over arbitrary uploads.
-    for source in ("youtube_music",):
-        try:
-            results = await asyncio.to_thread(search_source, source_query, source, 12 if artist_query else 8)
-        except Exception:
-            log.exception("%s search failed for %r", source, source_query)
-            continue
-        for item in results:
-            raw_title = _clean(item.get("title") or "")
-            uploader = _clean(item.get("uploader") or "")
-            if requested:
-                source_artist, source_title = uploader, raw_title
-                for separator in (" — ", " – ", " - ", " | "):
-                    if separator in raw_title:
-                        left, right = raw_title.split(separator, 1)
-                        source_artist, source_title = left.strip(), right.strip()
-                        break
-                title_score = max(_similarity(source_title, requested[1]), _similarity(raw_title, requested[1]) * 0.8)
-                artist_score = max(
-                    _similarity(uploader, requested[0]) if uploader else 0,
-                    _similarity(source_artist, requested[0]),
-                )
-                score = title_score * 0.6 + artist_score * 0.4
-                if title_score < 70 or artist_score < 65:
-                    continue
-                display_artist, display_title = requested[0], requested[1]
-            else:
-                # For a free-text query, score the actual title separately from the uploader.
-                # WRatio alone can overrate partial matches, so require strong title coverage too.
-                title_score = _similarity(raw_title, query)
-                combined_score = _similarity(f"{uploader} {raw_title}", query) if uploader else title_score
-                score = max(title_score, combined_score * 0.92)
-                query_words = {
-                    token.casefold() for token in re.findall(r"[^\W_]+", query, flags=re.UNICODE)
-                    if len(token) > 1
-                }
-                result_words = {
-                    token.casefold() for token in re.findall(
-                        r"[^\W_]+", f"{uploader} {raw_title}", flags=re.UNICODE
-                    ) if len(token) > 1
-                }
-                coverage = len(query_words & result_words) / max(1, len(query_words))
-                # Do not expose loosely related videos just because one word matches.
-                if score < max(70, threshold + 10) or coverage < 0.75:
-                    continue
-                display_artist, display_title = uploader or "Неизвестный исполнитель", raw_title
-
-            key = (
-                re.sub(r"[^\\w]+", "", display_title.casefold(), flags=re.UNICODE),
-                re.sub(r"[^\\w]+", "", display_artist.casefold(), flags=re.UNICODE),
-            )
-            if key in seen:
+    catalog_ranked: list[dict] = []
+    for candidate in catalog_tracks:
+        artist = str(candidate.get("artist") or "")
+        title = str(candidate.get("title") or "")
+        if requested:
+            artist_score = _similarity(requested[0], artist)
+            title_score = _similarity(requested[1], title)
+            if artist_score < 66 or title_score < 70:
                 continue
-            seen.add(key)
-            fallback.append({
-                "title": display_title or query,
+            item = dict(candidate)
+            item["match_score"] = title_score * 0.62 + artist_score * 0.38
+        elif artist_query:
+            artist_score = _similarity(query, artist)
+            if artist_score < 58:
+                continue
+            item = dict(candidate)
+            item["match_score"] = artist_score * 0.75 + float(candidate.get("metadata_score") or 0) * 0.25
+        else:
+            score = float(candidate.get("metadata_score") or 0)
+            if score < 52:
+                continue
+            item = dict(candidate)
+            item["match_score"] = score
+        catalog_ranked.append(item)
+
+    catalog_ranked.sort(
+        key=lambda item: (float(item.get("match_score") or 0), float(item.get("metadata_score") or 0)),
+        reverse=True,
+    )
+
+    source_query = f"{requested[0]} {requested[1]}" if requested else query
+    source_ranked: list[dict] = []
+    try:
+        # YTMusic's songs filter avoids arbitrary user videos and exposes
+        # structured artist/title fields, which are better than channel names.
+        source_results = await asyncio.to_thread(
+            search_source, source_query, "youtube_music", 25 if artist_query else 20
+        )
+    except Exception:
+        log.exception("YouTube Music search failed for %r", source_query)
+        source_results = []
+
+    for source_item in source_results:
+        source_title = _clean(str(source_item.get("title") or ""))
+        source_artist = _clean(str(source_item.get("uploader") or ""))
+        if not source_title or not source_artist:
+            continue
+
+        if requested:
+            title_score = _similarity(requested[1], source_title)
+            artist_score = _similarity(requested[0], source_artist)
+            if title_score < 68 or artist_score < 62:
+                continue
+            source_score = title_score * 0.62 + artist_score * 0.38
+        elif artist_query:
+            artist_score = _similarity(query, source_artist)
+            if artist_score < 55:
+                continue
+            source_score = artist_score * 0.75 + _similarity(source_title, query) * 0.25
+        else:
+            title_score = _similarity(query, source_title)
+            combined_score = _similarity(f"{source_artist} {source_title}", query)
+            query_words = {
+                token.casefold() for token in re.findall(r"[^\W_]+", query, flags=re.UNICODE)
+                if len(token) > 1
+            }
+            result_words = {
+                token.casefold() for token in re.findall(
+                    r"[^\W_]+", f"{source_artist} {source_title}", flags=re.UNICODE
+                ) if len(token) > 1
+            }
+            coverage = len(query_words & result_words) / max(1, len(query_words))
+            if max(title_score, combined_score * 0.92) < 62 or coverage < 0.5:
+                continue
+            source_score = max(title_score, combined_score * 0.92)
+
+        # If catalog metadata describes this same recording, use it for display
+        # and tags; keep the YouTube Music URL as the audio source.
+        best_catalog = None
+        best_pair_score = 0.0
+        for catalog in catalog_tracks:
+            artist_score = _similarity(source_artist, str(catalog.get("artist") or ""))
+            title_score = _similarity(source_title, str(catalog.get("title") or ""))
+            pair_score = title_score * 0.62 + artist_score * 0.38
+            if artist_score >= 68 and title_score >= 72 and pair_score > best_pair_score:
+                best_catalog, best_pair_score = catalog, pair_score
+
+        if best_catalog:
+            item = dict(best_catalog)
+            item["track_url"] = source_item.get("url") or item.get("track_url") or ""
+            item["audio_source"] = "youtube_music"
+            item["match_score"] = max(source_score, best_pair_score)
+        else:
+            # For explicit artist/title requests, preserve the user's spelling
+            # rather than copying noisy source text into ID3 tags.
+            if requested:
+                display_artist, display_title = requested
+            else:
+                display_artist, display_title = source_artist, source_title
+            item = {
+                "title": display_title,
                 "artist": display_artist,
                 "album": "",
-                "duration": item.get("duration"),
+                "duration": source_item.get("duration"),
                 "artwork_url": "",
-                "track_url": item.get("url", ""),
-                "metadata_score": score,
-                "metadata_source": source,
-            })
-    fallback.sort(key=lambda t: t["metadata_score"], reverse=True)
-    return fallback[:10 if requested else 15]
+                "track_url": source_item.get("url") or "",
+                "metadata_score": 0,
+                "metadata_source": "YouTube Music",
+                "audio_source": "youtube_music",
+                "match_score": source_score,
+            }
+        source_ranked.append(item)
 
+    # Merge catalog and YouTube Music results. De-duplicate by normalized
+    # artist/title while keeping the best catalog-backed representation.
+    merged: dict[tuple[str, str], dict] = {}
+    def normalized(value: str) -> str:
+        return re.sub(r"[^\w]+", "", value.casefold(), flags=re.UNICODE)
+
+    for item in catalog_ranked + sorted(source_ranked, key=lambda value: float(value.get("match_score") or 0), reverse=True):
+        artist = _clean(str(item.get("artist") or ""))
+        title = _clean(str(item.get("title") or ""))
+        if not artist or not title:
+            continue
+        key = (normalized(artist), normalized(title))
+        existing = merged.get(key)
+        if existing is None:
+            item["artist"], item["title"] = artist, title
+            merged[key] = item
+        else:
+            # Keep the source URL if catalog metadata had no audio resolution URL.
+            if not existing.get("track_url") and item.get("track_url"):
+                existing["track_url"] = item["track_url"]
+                existing["audio_source"] = item.get("audio_source")
+            if _metadata_priority(item) > _metadata_priority(existing):
+                source_url = existing.get("track_url") or item.get("track_url")
+                audio_source = existing.get("audio_source") or item.get("audio_source")
+                existing.update(item)
+                existing["track_url"] = source_url
+                if audio_source:
+                    existing["audio_source"] = audio_source
+
+    results = list(merged.values())
+    results.sort(
+        key=lambda item: (
+            float(item.get("match_score", item.get("metadata_score", 0)) or 0),
+            float(item.get("metadata_score") or 0),
+        ),
+        reverse=True,
+    )
+    # Return up to 15 meaningful choices; exact artist/title searches should
+    # not be flooded by loosely related tracks.
+    return results[:15]
 
 def _split_track_query(query: str) -> tuple[str, str] | None:
     parts = re.split(r"\s+(?:—|–|-)\s+|\s+\|\s+", query.strip(), maxsplit=1)
