@@ -23,7 +23,7 @@ def _download(url: str) -> tuple[str, dict]:
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
-            "preferredquality": "192",
+            "preferredquality": "320",
         }],
     }
     if YT_PROXY:
