@@ -205,7 +205,7 @@ async def choose_track(callback: CallbackQuery) -> None:
 
 @dp.inline_query()
 async def inline_search(inline_query: InlineQuery) -> None:
-    """Return cached Telegram audio immediately; uncached tracks use the bot chat for first download."""
+    """Return playable cached audio; prepare the top uncached result on demand."""
     query = (inline_query.query or "").strip()
     if len(query) < 2:
         await inline_query.answer([], cache_time=1, is_personal=True)
@@ -218,40 +218,57 @@ async def inline_search(inline_query: InlineQuery) -> None:
             await inline_query.answer([], cache_time=1, is_personal=True)
             return
 
-        results = []
+        # First check all search results against the cache.
+        cached_results = []
+        uncached_tracks = []
         for idx, track in enumerate(tracks):
-            artist = str(track.get("artist") or "Неизвестный исполнитель")
-            title = str(track.get("title") or "Без названия")
             file_id = _cache_get(_track_key(track))
             if file_id:
-                results.append(InlineQueryResultCachedAudio(
+                cached_results.append(InlineQueryResultCachedAudio(
                     id=f"rh-a-{idx}",
                     audio_file_id=file_id,
                 ))
-                continue
+            else:
+                uncached_tracks.append(track)
 
-            album = str(track.get("album") or "").strip()
-            duration = track.get("duration")
-            details = []
-            if album:
-                details.append(album)
-            if isinstance(duration, (int, float)) and duration > 0:
-                details.append(f"{int(duration) // 60}:{int(duration) % 60:02d}")
-            results.append(InlineQueryResultArticle(
-                id=f"rh-new-{idx}",
-                title=f"{artist} — {title}"[:128],
-                description=" · ".join(details)[:255] or "Первый раз? Получи MP3 в чате с Rhythm",
-                input_message_content=InputTextMessageContent(
-                    message_text=(
-                        f"{artist} — {title}\n"
-                        f"Чтобы подготовить этот трек для мгновенной отправки, один раз найди его в чате с Rhythm."
-                    )
-                ),
-            ))
+        # If nothing is cached yet, prepare the best-ranked result directly
+        # from inline search. Limit this to one download to avoid Telegram's
+        # inline-answer deadline being exceeded.
+        if not cached_results and uncached_tracks and INLINE_CACHE_CHANNEL_ID:
+            track = uncached_tracks[0]
+            query_to_download = f'{track.get("artist", "")} — {track.get("title", "")}'
+            path = None
+            try:
+                prepared_track, path = await asyncio.wait_for(
+                    _download_tagged(query_to_download), timeout=6.0
+                )
+                sent = await asyncio.wait_for(
+                    inline_query.bot.send_audio(
+                        chat_id=INLINE_CACHE_CHANNEL_ID,
+                        audio=FSInputFile(path, filename=f'{prepared_track["artist"]} - {prepared_track["title"]}.mp3'),
+                        title=str(prepared_track.get("title") or "Без названия")[:64],
+                        performer=str(prepared_track.get("artist") or "Неизвестный исполнитель")[:64],
+                    ),
+                    timeout=3.0,
+                )
+                if not sent.audio:
+                    raise RuntimeError("Telegram did not return audio from cache channel")
+                file_id = sent.audio.file_id
+                _cache_set(_track_key(prepared_track), file_id)
+                _cache_set(_track_key(track), file_id)
+                log.info("Inline cache prepared from inline query: query=%r key=%s", query, _track_key(prepared_track))
+                cached_results.append(InlineQueryResultCachedAudio(
+                    id="rh-inline-prepared",
+                    audio_file_id=file_id,
+                ))
+            except Exception:
+                log.exception("Could not prepare uncached inline result for query=%r", query)
+            finally:
+                if path:
+                    cleanup(path)
 
-        await inline_query.answer(results, cache_time=1, is_personal=True)
-        log.info("Inline search query=%r results=%d cached=%d", query, len(results),
-                 sum(1 for item in results if isinstance(item, InlineQueryResultCachedAudio)))
+        await inline_query.answer(cached_results, cache_time=1, is_personal=True)
+        log.info("Inline search query=%r results=%d cached=%d", query, len(cached_results), len(cached_results))
     except asyncio.TimeoutError:
         log.warning("Inline search timed out for query=%r", query)
         try:
