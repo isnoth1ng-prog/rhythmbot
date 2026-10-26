@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+import requests
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
@@ -84,7 +86,65 @@ def _track_from_entry(entry: dict) -> dict | None:
     }
 
 
+def _extract_yandex_playlist(url: str) -> dict | None:
+    """Use Yandex's public playlist handler for public playlists when available."""
+    parsed = urlparse(url)
+    match = re.search(r"/users/([^/]+)/playlists/(\\d+)", unquote(parsed.path))
+    if not match:
+        return None
+    owner, kind = match.groups()
+    endpoint = "https://music.yandex.ru/handlers/playlist.jsx"
+    params = {
+        "owner": owner,
+        "kinds": kind,
+        "light": "true",
+        "lang": "ru",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; RhythmPlaylistBot/1.0)",
+        "Accept": "application/json, text/plain, */*",
+    }
+    try:
+        response = requests.get(endpoint, params=params, headers=headers, timeout=(5, 20))
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+    playlist = payload.get("playlist") if isinstance(payload, dict) else None
+    if not isinstance(playlist, dict):
+        return None
+    tracks = []
+    for entry in playlist.get("tracks") or []:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        artists = entry.get("artists") or []
+        artist = ", ".join(
+            str(item.get("name") or "").strip()
+            for item in artists if isinstance(item, dict) and item.get("name")
+        )
+        if not title:
+            continue
+        tracks.append({
+            "title": title,
+            "artist": artist,
+            "duration": round(entry["durationMs"] / 1000) if isinstance(entry.get("durationMs"), (int, float)) else None,
+            "source_url": "",
+        })
+    if not tracks:
+        return None
+    return {
+        "title": str(playlist.get("title") or "Яндекс Музыка"),
+        "tracks": tracks,
+    }
+
+
 def _extract_playlist(url: str) -> dict:
+    parsed = urlparse(url)
+    if parsed.hostname and parsed.hostname.casefold() in {"music.yandex.ru", "music.yandex.com"}:
+        yandex_result = _extract_yandex_playlist(url)
+        if yandex_result:
+            return yandex_result
     try:
         with YoutubeDL(_options()) as ydl:
             info = ydl.extract_info(url, download=False)
