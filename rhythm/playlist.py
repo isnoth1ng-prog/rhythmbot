@@ -166,7 +166,7 @@ def _extract_spotify_playlist(url: str) -> dict | None:
         headers = {"Authorization": f"Bearer {token}"}
         endpoint = f"https://api.spotify.com/v1/playlists/{playlist_id}"
         response = requests.get(
-            endpoint, params={"fields": "name,tracks.items(track(name,artists(name),duration_ms,external_urls))"},
+            endpoint, params={"fields": "name,tracks.items(track(name,artists(name),duration_ms,external_urls)),tracks.next"},
             headers=headers, timeout=(5, 20),
         )
         response.raise_for_status()
