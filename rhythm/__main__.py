@@ -10,6 +10,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ChatAction
 from aiogram.filters import CommandStart, Command
+from aiogram.exceptions import TelegramRetryAfter, TelegramNetworkError, TelegramServerError
 from aiogram.types import (
     Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup,
     InlineKeyboardButton, InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedAudio, InputTextMessageContent,
@@ -107,6 +108,28 @@ async def help_command(message: Message) -> None:
     await message.answer("Отправь название трека для поиска или ссылку на плейлист Яндекс Музыки, Apple Music, Spotify либо YouTube. Доступность импорта зависит от публичного доступа к списку песен. Инлайн: @имя_бота запрос.")
 
 
+async def _send_playlist_audio(message: Message, path: str, track: dict, fallback: dict) -> None:
+    title = str(track.get("title") or fallback.get("title") or "Без названия")[:64]
+    artist = str(track.get("artist") or fallback.get("artist") or "Неизвестный исполнитель")[:64]
+    filename = f"{artist} - {title}.mp3"
+    for attempt in range(4):
+        try:
+            await message.answer_audio(
+                audio=FSInputFile(path, filename=filename),
+                title=title,
+                performer=artist,
+            )
+            return
+        except TelegramRetryAfter as exc:
+            if attempt == 3:
+                raise
+            await asyncio.sleep(max(1, exc.retry_after) + 0.5)
+        except (TelegramNetworkError, TelegramServerError):
+            if attempt == 3:
+                raise
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+
 async def _import_playlist(message: Message, url: str) -> None:
     """Read a playlist and send matching audio one track at a time."""
     async with _playlist_semaphore:
@@ -141,12 +164,10 @@ async def _import_playlist(message: Message, url: str) -> None:
                 size = Path(path).stat().st_size
                 if size > 49 * 1024 * 1024:
                     raise RuntimeError("Файл превышает лимит Telegram")
-                await message.answer_audio(
-                    audio=FSInputFile(path, filename=f'{track["artist"]} - {track["title"]}.mp3'),
-                    title=str(track.get("title") or title or "Без названия")[:64],
-                    performer=str(track.get("artist") or artist or "Неизвестный исполнитель")[:64],
-                )
+                await _send_playlist_audio(message, path, track, item)
                 sent_count += 1
+                # Leave room for Telegram's per-chat message limits on very large playlists.
+                await asyncio.sleep(0.12)
             except Exception as exc:
                 failed_count += 1
                 label = f"{artist} — {title}" if artist else title
@@ -158,7 +179,7 @@ async def _import_playlist(message: Message, url: str) -> None:
                     cleanup(path)
 
             now = asyncio.get_running_loop().time()
-            if index % 5 == 0 or now - last_progress >= 12 or index == len(tracks):
+            if index % 10 == 0 or now - last_progress >= 12 or index == len(tracks):
                 try:
                     await status.edit_text(
                         f'Плейлист: {playlist["title"]}\n'
