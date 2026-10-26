@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from urllib.parse import urlparse
 
@@ -123,4 +124,4 @@ async def extract_playlist(url: str) -> dict:
     """Extract playlist metadata without downloading audio; runs network work off-loop."""
     if not is_music_url(url):
         raise PlaylistImportError("Пришли ссылку на плейлист Яндекс Музыки, Apple Music, Spotify или YouTube.")
-    return await __import__("asyncio").to_thread(_extract_playlist, url)
+    return await asyncio.to_thread(_extract_playlist, url)
