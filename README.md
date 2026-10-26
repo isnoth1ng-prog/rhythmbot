@@ -28,3 +28,10 @@ The Docker image starts the current implementation with `python -m rhythm` (not 
 ## Deployment
 
 Deploy using the repository Dockerfile. Railway's service-level Start Command, if explicitly overridden in the dashboard, must be cleared or set to `python -m rhythm` so it does not launch the legacy engine.
+
+
+## Playlist import (experimental)
+
+Send a public playlist URL to the Telegram bot to attempt importing its track list. The bot processes entries sequentially, searches available audio sources for each recording, sends successful matches as Telegram audio, and reports failures at the end. Jobs are queued with a small concurrency limit to avoid overwhelming the service.
+
+Supported URL domains are recognized for Yandex Music, Apple Music, Spotify, and YouTube. **Recognition does not guarantee that a provider's playlist can be read**: this first implementation relies on yt-dlp extractors, and some providers may require a dedicated API adapter, credentials, or a public playlist. It does not bypass DRM or subscription restrictions. Very large playlists can take a long time and may encounter Telegram/source rate limits.
